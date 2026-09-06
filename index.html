@@ -387,6 +387,9 @@
       </div>
       <input type="range" id="subtitleFontRange" min="-30" max="5" step="1" value="0">
 
+      <button type="button" id="fitOneLineBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:8px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0d1526;font-weight:bold;cursor:pointer;">📏 選択中の字幕を1行に収める</button>
+      <div class="hint" id="fitOneLineStatus" style="text-align:center;"></div>
+
       <audio id="checkPreviewAudio" controls style="width:100%;margin-top:12px;"></audio>
       <div id="checkPreviewDisplay" style="margin-top:8px;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:13px;min-height:20px;color:var(--text);">再生すると、今表示されている字幕・画像がここに出ます</div>
 
@@ -1526,6 +1529,48 @@ subtitleFontRange.addEventListener('input', () => {
   rebuildLineOverlays();
 });
 
+const fitOneLineBtn = document.getElementById('fitOneLineBtn');
+const fitOneLineStatus = document.getElementById('fitOneLineStatus');
+
+fitOneLineBtn.addEventListener('click', () => {
+  if(overlayActiveIndex < 0 || !subtitleRows[overlayActiveIndex]){
+    fitOneLineStatus.textContent = '先にタイムラインで字幕を選んでください';
+    return;
+  }
+  const row = subtitleRows[overlayActiveIndex];
+  const W = canvas.width, H = canvas.height;
+
+  // 元の設定を一旦リセットして、まっさらな状態から自動調整する
+  row.widthRatio = 0.98;
+  row.letterSpacing = 0;
+
+  function countLines(){
+    return computeSubtitleLayout(row, W, H, ctx).length;
+  }
+
+  if(countLines() > 1){
+    // 横幅を最大まで広げても収まらない場合、文字間隔を少しずつ詰める(最大-40pxまで)
+    let spacing = 0;
+    while(countLines() > 1 && spacing > -40){
+      spacing -= 2;
+      row.letterSpacing = spacing;
+    }
+  }
+
+  const finalLines = countLines();
+  subtitleWidthRange.value = row.widthRatio;
+  subtitleWidthLabel.textContent = Math.round(row.widthRatio * 100) + '%';
+  subtitleFontRange.value = row.letterSpacing;
+  subtitleFontLabel.textContent = row.letterSpacing + 'px';
+
+  drawCurrentPreviewFrame();
+  rebuildLineOverlays();
+
+  fitOneLineStatus.textContent = finalLines <= 1
+    ? '✓ 1行に収まりました'
+    : `文字が多すぎて1行に収まりきりません(現在${finalLines}行)。台本の文字数を減らすことをおすすめします。`;
+});
+
 function drawCurrentPreviewFrame(){
   if(!checkNarrationBuffer) return;
   const t = checkPreviewAudio.currentTime || 0;
@@ -1776,12 +1821,12 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
     ]);
 
     const mimeCandidates = [
-      'video/mp4;codecs=h264,aac',
-      'video/mp4;codecs=avc1,mp4a',
-      'video/mp4',
       'video/webm;codecs=vp9,opus',
       'video/webm;codecs=vp8,opus',
-      'video/webm'
+      'video/webm',
+      'video/mp4;codecs=h264,aac',
+      'video/mp4;codecs=avc1,mp4a',
+      'video/mp4'
     ];
     let mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
     const isMp4 = mimeType.startsWith('video/mp4');
