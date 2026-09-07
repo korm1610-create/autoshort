@@ -368,7 +368,15 @@
         <div id="checkCanvasOverlayContainer" style="position:absolute;inset:0;pointer-events:none;"></div>
       </div>
 
-      <div class="hint" style="margin-top:0;margin-bottom:4px;">字幕タイムライン — ブロックの右端をドラッグして長さを調整、クリックでその場所に移動</div>
+      <div class="hint" style="margin-top:0;margin-bottom:4px;">背景タイムライン(画像/動画) — クリックで選択、動画なら下でどこを切るか調整できます</div>
+      <div id="mediaTimelineScroll" style="overflow-x:auto;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px 0;position:relative;">
+        <div id="mediaTimelineRuler" style="position:relative;height:16px;margin-left:4px;"></div>
+        <div id="mediaTimelineTrack" style="position:relative;height:44px;margin:4px 4px 0;"></div>
+        <div id="mediaTimelinePlayhead" style="position:absolute;top:0;left:4px;width:2px;height:100%;background:#ff3b30;box-shadow:0 0 4px rgba(255,59,48,0.8);pointer-events:none;z-index:10;"></div>
+      </div>
+      <div id="mediaTrimEditor" style="margin-top:8px;"></div>
+
+      <div class="hint" style="margin-top:16px;margin-bottom:4px;">字幕タイムライン — ブロックの右端をドラッグして長さを調整、クリックでその場所に移動</div>
       <div id="subtitleTimelineScroll" style="overflow-x:auto;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px 0;position:relative;">
         <div id="subtitleTimelineRuler" style="position:relative;height:16px;margin-left:4px;"></div>
         <div id="subtitleTimelineTrack" style="position:relative;height:44px;margin:4px 4px 0;"></div>
@@ -508,7 +516,7 @@ function getScriptParagraphs(text){
     }
   });
   if(current.length) groups.push(current);
-  return groups.map(g => g.join(''));
+  return groups.map(g => g.join(' '));
 }
 
 function extractKeywords(text){
@@ -568,9 +576,7 @@ genMetaBtn.addEventListener('click', () => {
   const bodyParagraphs = paragraphs.slice(1);
   const description =
 `${hook}
-
-▼今回のお話
-${bodyParagraphs.map(p => '・' + p).join('\n')}
+${bodyParagraphs.join(' ')}
 
 30秒でわかる江戸の雑学チャンネルだよ〜
 「へぇ〜」って思ったらチャンネル登録してね!🙏
@@ -1349,18 +1355,31 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
   } else {
     // 動画は自前の時間で勝手に再生が進む。毎フレーム細かく補正すると
     // シークが完了する前に次のシークが割り込み、映像が止まって見えてしまうため、
-    // 「このシーンに入った最初の1回」と「シーク(スクラブ)で時間が飛んだ時」だけ
+    // 「設定(範囲・速度)が変わった時」「シーク(スクラブ)で時間が飛んだ時」だけ
     // 動画の位置を合わせ、それ以外の通常再生時は一切触らず動画本来の再生に完全に任せる。
-    // (動画の長さで一定間隔ごとに補正すると、動画自身のループのタイミングとズレて
-    //  誤って「ズレた」と判定してしまい、それが定期的なガタつきの原因になっていた)
+    const trimStart = seg.trimStart || 0;
+    const rate = seg.playbackRate || 1;
+    const videoDuration = media.el.duration || 1;
+    const trimLength = seg.trimLength || (videoDuration - trimStart);
+    const availableLength = Math.max(0.1, Math.min(trimLength, videoDuration - trimStart));
+
+    if(media.el.playbackRate !== rate){
+      try{ media.el.playbackRate = rate; }catch(e){}
+    }
+
+    const configKey = `${seg.start}|${trimStart}|${trimLength}|${rate}`;
     const lastT = media._lastCurrentTime;
-    const isNewSegmentContext = media._activeSegStart !== seg.start;
-    const jumped = isNewSegmentContext || lastT === undefined || Math.abs(currentTime - lastT) > 1.0;
+    const configChanged = media._activeConfigKey !== configKey;
+    const jumped = configChanged || lastT === undefined || Math.abs(currentTime - lastT) > 1.0;
+
     if(jumped){
-      const videoDuration = media.el.duration || 1;
-      const targetVideoTime = ((currentTime - seg.start) % videoDuration + videoDuration) % videoDuration;
+      const elapsedInSeg = (currentTime - seg.start) * rate;
+      const targetVideoTime = trimStart + (((elapsedInSeg % availableLength) + availableLength) % availableLength);
       try{ media.el.currentTime = targetVideoTime; }catch(e){}
-      media._activeSegStart = seg.start;
+      media._activeConfigKey = configKey;
+    } else if(media.el.currentTime >= trimStart + availableLength - 0.05){
+      // トリムした範囲の終わりまで来たら、開始位置に戻ってその範囲だけでループする
+      try{ media.el.currentTime = trimStart; }catch(e){}
     }
     media._lastCurrentTime = currentTime;
     if(media.el.paused){
@@ -1447,11 +1466,15 @@ let checkImages = [];
 let subtitleRows = [];  // [{ text, duration }]
 let imageRows = [];     // [duration, ...] (checkImagesと同じ順番)
 
+const mediaTimelineRuler = document.getElementById('mediaTimelineRuler');
+const mediaTimelineTrack = document.getElementById('mediaTimelineTrack');
+const mediaTrimEditor = document.getElementById('mediaTrimEditor');
 const subtitleTimelineScroll = document.getElementById('subtitleTimelineScroll');
 const subtitleTimelineRuler = document.getElementById('subtitleTimelineRuler');
 const subtitleTimelineTrack = document.getElementById('subtitleTimelineTrack');
 const PX_PER_SEC = 40;
 const timelinePlayhead = document.getElementById('timelinePlayhead');
+const mediaTimelinePlayhead = document.getElementById('mediaTimelinePlayhead');
 
 function seekToTimelineX(clientX){
   const trackRect = subtitleTimelineTrack.getBoundingClientRect();
@@ -1612,34 +1635,182 @@ function updateSubtitleTotal(){
   subtitleTotalLabel.style.color = diff > 0.5 ? '#e07a5f' : 'var(--sub)';
 }
 
+function buildVideoTrimUI(row, i){
+  const durationSec = checkImages[i] ? (checkImages[i].el.duration || 10) : 10;
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
+
+  const info = document.createElement('div');
+  info.className = 'hint';
+  info.style.marginTop = '0';
+  info.textContent = '上の大きい映像を再生・ドラッグして見たい場面に合わせてから、ボタンを押してください。';
+  wrap.appendChild(info);
+
+  const rangeLabel = document.createElement('div');
+  rangeLabel.style.cssText = 'font-size:12px;color:var(--text);';
+  wrap.appendChild(rangeLabel);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;';
+  btnRow.innerHTML = `
+    <button type="button" class="markStartBtn" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--accent2);background:transparent;color:var(--accent2);font-weight:bold;cursor:pointer;font-size:12.5px;">⏱ 今の位置を開始点にする</button>
+    <button type="button" class="markEndBtn" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--accent2);background:transparent;color:var(--accent2);font-weight:bold;cursor:pointer;font-size:12.5px;">⏱ 今の位置を終了点にする</button>
+  `;
+  wrap.appendChild(btnRow);
+
+  const rateRow = document.createElement('div');
+  rateRow.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sub);margin-top:2px;';
+  rateRow.innerHTML = `
+    <span>再生速度</span>
+    <input type="number" class="rateInput" min="0.25" max="3" step="0.05" value="${(row.playbackRate||1).toFixed(2)}" style="width:56px;background:#150f0a;border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px;text-align:center;">
+    <span>倍</span>
+    <button type="button" class="resetTrimBtn" style="margin-left:auto;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:11px;">全体を使う</button>
+  `;
+  wrap.appendChild(rateRow);
+
+  function updateRangeLabel(){
+    const endVal = row.trimStart + (row.trimLength || (durationSec - row.trimStart));
+    rangeLabel.textContent = `使う範囲: ${row.trimStart.toFixed(1)}秒 〜 ${endVal.toFixed(1)}秒(元の動画は全${durationSec.toFixed(1)}秒)`;
+  }
+  updateRangeLabel();
+
+  const markStartBtn = btnRow.querySelector('.markStartBtn');
+  const markEndBtn = btnRow.querySelector('.markEndBtn');
+  const rateInput = rateRow.querySelector('.rateInput');
+  const resetTrimBtn = rateRow.querySelector('.resetTrimBtn');
+
+  markStartBtn.addEventListener('click', () => {
+    const media = checkImages[i];
+    if(!media) return;
+    const currentVideoTime = media.el.currentTime;
+    const endVal = row.trimStart + (row.trimLength || (durationSec - row.trimStart));
+    row.trimStart = Math.min(currentVideoTime, endVal - 0.2);
+    row.trimLength = Math.max(0.2, endVal - row.trimStart);
+    row._videoStarted = false;
+    updateRangeLabel();
+    redrawPreviewAtCurrentTime();
+  });
+
+  markEndBtn.addEventListener('click', () => {
+    const media = checkImages[i];
+    if(!media) return;
+    const currentVideoTime = media.el.currentTime;
+    row.trimLength = Math.max(0.2, currentVideoTime - row.trimStart);
+    row._videoStarted = false;
+    updateRangeLabel();
+    redrawPreviewAtCurrentTime();
+  });
+
+  resetTrimBtn.addEventListener('click', () => {
+    row.trimStart = 0;
+    row.trimLength = null;
+    row._videoStarted = false;
+    updateRangeLabel();
+    redrawPreviewAtCurrentTime();
+  });
+
+  rateInput.addEventListener('input', () => {
+    row.playbackRate = Math.max(0.25, parseFloat(rateInput.value) || 1);
+    redrawPreviewAtCurrentTime();
+  });
+
+  return wrap;
+}
+
 function renderImageRows(){
   imageTimingList.innerHTML = '';
   let cum = 0;
-  imageRows.forEach((dur, i) => {
+  imageRows.forEach((row, i) => {
     const start = cum;
-    cum += dur;
+    cum += row.duration;
     const file = allMediaFiles[i];
+    const isVideo = file && file.type && file.type.startsWith('video/');
     const div = document.createElement('div');
     div.dataset.index = i;
     div.style.cssText = 'display:flex;align-items:center;gap:8px;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;';
     div.innerHTML = `
-      <span style="flex:1;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${start.toFixed(1)}s〜 ${file ? file.name : ('素材'+(i+1))}</span>
-      <input type="number" min="0.2" step="0.1" value="${dur.toFixed(1)}" style="width:60px;background:#150f0a;border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px;text-align:center;">
+      <span style="flex:1;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${start.toFixed(1)}s〜 ${file ? file.name : ('素材'+(i+1))}${isVideo ? ' 🎬 (上のタイムラインで選ぶと切り取り編集できます)' : ''}</span>
+      <input type="number" class="durInput" min="0.2" step="0.1" value="${row.duration.toFixed(1)}" style="width:60px;background:#150f0a;border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px;text-align:center;">
     `;
-    const input = div.querySelector('input');
-    input.addEventListener('input', () => {
-      imageRows[i] = Math.max(0.2, parseFloat(input.value) || 0.2);
+    const durInput = div.querySelector('.durInput');
+    durInput.addEventListener('input', () => {
+      row.duration = Math.max(0.2, parseFloat(durInput.value) || 0.2);
       updateImageTotal();
+      renderMediaTimeline();
       redrawPreviewAtCurrentTime();
     });
     imageTimingList.appendChild(div);
   });
   updateImageTotal();
+  renderMediaTimeline();
   redrawPreviewAtCurrentTime();
 }
 
+let selectedMediaIndex = -1;
+
+function renderMediaTimeline(){
+  const totalDuration = checkNarrationBuffer ? checkNarrationBuffer.duration : 0;
+  const totalWidth = Math.max(totalDuration * PX_PER_SEC, 200);
+
+  mediaTimelineRuler.style.width = totalWidth + 'px';
+  mediaTimelineRuler.innerHTML = '';
+  const tickInterval = totalDuration > 60 ? 10 : 5;
+  for(let sec = 0; sec <= totalDuration + 0.01; sec += tickInterval){
+    const tick = document.createElement('div');
+    tick.textContent = Math.round(sec) + '秒';
+    tick.style.cssText = `position:absolute;left:${sec*PX_PER_SEC}px;top:0;font-size:10px;color:var(--sub);white-space:nowrap;border-left:1px solid var(--border);padding-left:3px;`;
+    mediaTimelineRuler.appendChild(tick);
+  }
+
+  mediaTimelineTrack.style.width = totalWidth + 'px';
+  mediaTimelineTrack.innerHTML = '';
+  let cum = 0;
+  imageRows.forEach((row, i) => {
+    const start = cum;
+    cum += row.duration;
+    const file = allMediaFiles[i];
+    const isVideo = file && file.type && file.type.startsWith('video/');
+    const block = document.createElement('div');
+    block.dataset.index = i;
+    block.style.cssText = `position:absolute;left:${start*PX_PER_SEC}px;width:${Math.max(row.duration*PX_PER_SEC,20)}px;top:0;height:40px;background:${isVideo ? '#4a9eff' : (i%2===0?'var(--accent2)':'#e0bd5a')};border-radius:5px;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,0.3);`;
+    block.innerHTML = `<div style="padding:4px 6px;font-size:11px;color:${isVideo ? '#fff' : '#0d1526'};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;">${isVideo ? '🎬 ' : ''}${file ? file.name : ('素材'+(i+1))}</div>`;
+    block.addEventListener('click', (e) => {
+      const rect = block.getBoundingClientRect();
+      const clickRatio = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0;
+      const targetTime = start + Math.max(0, Math.min(row.duration - 0.05, clickRatio * row.duration));
+      checkPreviewAudio.currentTime = targetTime;
+      selectMediaIndex(i);
+      redrawPreviewAtCurrentTime();
+    });
+    mediaTimelineTrack.appendChild(block);
+  });
+
+  Array.from(mediaTimelineTrack.children).forEach((el, i) => {
+    el.style.outline = i === selectedMediaIndex ? '2px solid #fff' : 'none';
+  });
+}
+
+function selectMediaIndex(i){
+  selectedMediaIndex = i;
+  Array.from(mediaTimelineTrack.children).forEach((el, idx) => {
+    el.style.outline = idx === i ? '2px solid #fff' : 'none';
+  });
+  mediaTrimEditor.innerHTML = '';
+  const file = allMediaFiles[i];
+  const isVideo = file && file.type && file.type.startsWith('video/');
+  if(isVideo && imageRows[i]){
+    mediaTrimEditor.appendChild(buildVideoTrimUI(imageRows[i], i));
+  } else if(file){
+    const msg = document.createElement('div');
+    msg.className = 'hint';
+    msg.textContent = '画像素材です(切り取り編集は動画のみ)。表示時間は下のリストで調整できます。';
+    mediaTrimEditor.appendChild(msg);
+  }
+}
+
 function updateImageTotal(){
-  const total = imageRows.reduce((a,d) => a + d, 0);
+  const total = imageRows.reduce((a,r) => a + r.duration, 0);
   const target = checkNarrationBuffer ? checkNarrationBuffer.duration : 0;
   const diff = Math.abs(total - target);
   imageTotalLabel.textContent = `合計 ${total.toFixed(1)}s / 音声 ${target.toFixed(1)}s`;
@@ -1655,11 +1826,11 @@ normalizeSubtitlesBtn.addEventListener('click', () => {
   renderSubtitleRows();
 });
 normalizeImagesBtn.addEventListener('click', () => {
-  const total = imageRows.reduce((a,d) => a + d, 0);
+  const total = imageRows.reduce((a,r) => a + r.duration, 0);
   const target = checkNarrationBuffer.duration;
   if(total <= 0) return;
   const scale = target / total;
-  imageRows = imageRows.map(d => d * scale);
+  imageRows.forEach(r => r.duration *= scale);
   renderImageRows();
 });
 
@@ -1683,7 +1854,7 @@ function timelineFromRows(rows, getExtra){
 
 function getPreviewTimelines(){
   const subTimeline = timelineFromRows(subtitleRows, r => ({ text: r.text, widthRatio: r.widthRatio, letterSpacing: r.letterSpacing }));
-  const imgTimeline = timelineFromRows(imageRows, (d, i) => ({ media: checkImages[i] }));
+  const imgTimeline = timelineFromRows(imageRows, (r, i) => ({ media: checkImages[i], trimStart: r.trimStart||0, trimLength: r.trimLength||null, playbackRate: r.playbackRate||1 }));
   return { subTimeline, imgTimeline };
 }
 
@@ -1842,6 +2013,7 @@ function redrawPreviewAtCurrentTime(){
   // タイムライン上のプレイヘッド(再生位置を示す縦線)を更新
   const playheadX = 4 + t * PX_PER_SEC;
   timelinePlayhead.style.left = playheadX + 'px';
+  mediaTimelinePlayhead.style.left = playheadX + 'px';
   const scrollLeft = subtitleTimelineScroll.scrollLeft;
   const visibleWidth = subtitleTimelineScroll.clientWidth;
   if(playheadX < scrollLeft || playheadX > scrollLeft + visibleWidth - 20){
@@ -1937,7 +2109,7 @@ renderBtn.addEventListener('click', async () => {
     const lines = scriptEl.value.split('\n');
     const defaultSubTimeline = buildSubtitleTimeline(lines, totalDuration);
     subtitleRows = defaultSubTimeline.map(s => ({ text: s.text, duration: s.end - s.start, widthRatio: DEFAULT_SUBTITLE_WIDTH_RATIO, letterSpacing: 0 }));
-    imageRows = images.map(() => totalDuration / images.length);
+    imageRows = images.map(() => ({ duration: totalDuration / images.length, trimStart: 0, trimLength: null, playbackRate: 1 }));
 
     renderSubtitleRows();
     renderImageRows();
@@ -1973,7 +2145,7 @@ checkModalConfirm.addEventListener('click', () => {
 
   const totalDuration = checkNarrationBuffer.duration;
   const subtitleTimeline = timelineFromRows(subtitleRows, r => ({ text: r.text, widthRatio: r.widthRatio, letterSpacing: r.letterSpacing }));
-  const imageTimeline = timelineFromRows(imageRows, (d, i) => ({ media: checkImages[i] }));
+  const imageTimeline = timelineFromRows(imageRows, (r, i) => ({ media: checkImages[i], trimStart: r.trimStart||0, trimLength: r.trimLength||null, playbackRate: r.playbackRate||1 }));
   // 最後のセグメントは音声の長さぴったりに揃える(ズレ防止)
   if(subtitleTimeline.length) subtitleTimeline[subtitleTimeline.length-1].end = totalDuration;
   if(imageTimeline.length) imageTimeline[imageTimeline.length-1].end = totalDuration;
