@@ -353,7 +353,7 @@
   </div>
 
   <div id="canvasWrap">
-    <canvas id="canvas" width="720" height="1280"></canvas>
+    <canvas id="canvas" width="1080" height="1920"></canvas>
   </div>
 
   <button id="renderBtn">🎬 動画を書き出す</button>
@@ -369,9 +369,12 @@
       </div>
 
       <div class="hint" style="margin-top:0;margin-bottom:4px;">字幕タイムライン — ブロックの右端をドラッグして長さを調整、クリックでその場所に移動</div>
-      <div id="subtitleTimelineScroll" style="overflow-x:auto;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px 0;">
+      <div id="subtitleTimelineScroll" style="overflow-x:auto;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px 0;position:relative;">
         <div id="subtitleTimelineRuler" style="position:relative;height:16px;margin-left:4px;"></div>
         <div id="subtitleTimelineTrack" style="position:relative;height:44px;margin:4px 4px 0;"></div>
+        <div id="timelinePlayhead" style="position:absolute;top:0;left:4px;width:14px;margin-left:-6px;height:100%;cursor:ew-resize;z-index:10;">
+          <div style="width:2px;height:100%;margin:0 auto;background:#ff3b30;box-shadow:0 0 4px rgba(255,59,48,0.8);"></div>
+        </div>
       </div>
 
       <div class="row" style="margin-top:10px;">
@@ -385,7 +388,7 @@
         <span class="hint" id="subtitleFontTargetLabel" style="margin:0;">文字の間隔を詰める(選択中: -) — マイナスにすると文字が近づき、多少重なってもOKなら1行に収まりやすくなります</span>
         <span class="hint" id="subtitleFontLabel" style="margin:0;">0px</span>
       </div>
-      <input type="range" id="subtitleFontRange" min="-30" max="5" step="1" value="0">
+      <input type="range" id="subtitleFontRange" min="-45" max="8" step="1" value="0">
 
       <button type="button" id="fitOneLineBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:8px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0d1526;font-weight:bold;cursor:pointer;">📏 選択中の字幕を1行に収める</button>
       <div class="hint" id="fitOneLineStatus" style="text-align:center;"></div>
@@ -424,6 +427,12 @@
     <div class="hint" id="formatNote" style="margin-top:8px;">
       ※ webm形式で書き出されます。TikTok/Instagramはそのままアップ不可な場合があるので、
       その時は「webm to mp4」で検索すると出てくる無料変換サイトで変換してください(YouTubeはwebmのままアップロード可)。
+    </div>
+
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);text-align:left;">
+      <div style="font-weight:bold;color:var(--accent2);margin-bottom:8px;">📝 YouTube用のタイトル・詳細・タグを作る</div>
+      <button type="button" id="genMetaBtn" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--accent2);background:transparent;color:var(--accent2);font-weight:bold;cursor:pointer;">✍️ 生成する</button>
+      <div id="metaOutput" style="margin-top:10px;"></div>
     </div>
   </div>
 </div>
@@ -482,6 +491,107 @@ const canvasWrap = document.getElementById('canvasWrap');
 const checkCanvasWrap = document.getElementById('checkCanvasWrap');
 const ctx = canvas.getContext('2d');
 const resultWrap = document.getElementById('resultWrap');
+const genMetaBtn = document.getElementById('genMetaBtn');
+const metaOutput = document.getElementById('metaOutput');
+
+const YT_BASE_TAGS = ['江戸時代','日本の歴史','豆知識','雑学','江戸雑学','Edo period','Japanese history','Japan trivia','Shorts'];
+
+function getScriptParagraphs(text){
+  const lines = text.split('\n');
+  const groups = [];
+  let current = [];
+  lines.forEach(l => {
+    if(l.trim() === ''){
+      if(current.length){ groups.push(current); current = []; }
+    } else {
+      current.push(l.trim());
+    }
+  });
+  if(current.length) groups.push(current);
+  return groups.map(g => g.join(''));
+}
+
+function extractKeywords(text){
+  const matches = text.match(/[一-龠ァ-ヶー]{2,}/g) || [];
+  const freq = {};
+  matches.forEach(w => { freq[w] = (freq[w] || 0) + 1; });
+  return Object.keys(freq).sort((a,b) => freq[b] - freq[a]);
+}
+
+function makeCopyCard(label, text, isTextarea){
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#0a1220;border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;';
+
+  const labelEl = document.createElement('div');
+  labelEl.textContent = label;
+  labelEl.style.cssText = 'color:var(--accent2);font-weight:bold;font-size:12.5px;margin-bottom:6px;';
+  card.appendChild(labelEl);
+
+  const box = document.createElement(isTextarea ? 'textarea' : 'input');
+  box.readOnly = true;
+  if(isTextarea){ box.value = text; box.style.minHeight = '90px'; }
+  else { box.type = 'text'; box.value = text; }
+  box.style.cssText += 'width:100%;background:#150f0a;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px;font-size:12.5px;line-height:1.5;box-sizing:border-box;' + (isTextarea ? 'resize:vertical;min-height:90px;' : '');
+  card.appendChild(box);
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.textContent = '📋 コピー';
+  copyBtn.style.cssText = 'margin-top:8px;width:100%;padding:9px;border-radius:8px;border:none;background:var(--accent2);color:#0d1526;font-weight:bold;cursor:pointer;font-size:13px;';
+  copyBtn.addEventListener('click', () => {
+    box.select();
+    navigator.clipboard.writeText(text).catch(() => document.execCommand('copy'));
+    copyBtn.textContent = '✓ コピーしました';
+    setTimeout(() => { copyBtn.textContent = '📋 コピー'; }, 1500);
+  });
+  card.appendChild(copyBtn);
+  return card;
+}
+
+genMetaBtn.addEventListener('click', () => {
+  const scriptText = scriptEl.value.trim();
+  if(!scriptText){
+    alert('台本が空のようです');
+    return;
+  }
+  const paragraphs = getScriptParagraphs(scriptText);
+  const hook = paragraphs[0] || '';
+  const hookClean = hook.replace(/[!?!?]+$/, '');
+  const hasHookPunctuation = /[!?!?]$/.test(hook);
+
+  const titles = [
+    hasHookPunctuation ? hook : `${hook}!?`,
+    `【江戸雑学】${hookClean}って知ってた?`,
+    `${hookClean}という話`
+  ];
+
+  const bodyParagraphs = paragraphs.slice(1);
+  const description =
+`${hook}
+
+▼今回のお話
+${bodyParagraphs.map(p => '・' + p).join('\n')}
+
+30秒でわかる江戸の雑学チャンネルだよ〜
+「へぇ〜」って思ったらチャンネル登録してね!🙏
+
+#江戸時代 #豆知識 #江戸雑学 #Shorts`;
+
+  const keywords = extractKeywords(scriptText).slice(0, 10);
+  const allTags = [...keywords, ...YT_BASE_TAGS];
+  const uniqueTags = [...new Set(allTags)];
+  const tagsText = uniqueTags.join(', ');
+
+  metaOutput.innerHTML = '';
+  titles.forEach((t, i) => metaOutput.appendChild(makeCopyCard(`タイトル案 ${i+1}`, t, false)));
+  metaOutput.appendChild(makeCopyCard('概要欄(詳細説明)', description, true));
+  metaOutput.appendChild(makeCopyCard('タグ(カンマ区切り)', tagsText, true));
+
+  const note = document.createElement('div');
+  note.className = 'hint';
+  note.textContent = '※ 台本から自動で組み立てた叩き台です。内容を見て自由に調整してください。';
+  metaOutput.appendChild(note);
+});
 const resultVideo = document.getElementById('result');
 const downloadLink = document.getElementById('downloadLink');
 const formatNote = document.getElementById('formatNote');
@@ -1061,7 +1171,18 @@ function loadMedia(file){
       v.loop = true;
       v.playsInline = true;
       v.preload = 'auto';
-      v.onloadedmetadata = () => resolve({ type: 'video', el: v, width: v.videoWidth, height: v.videoHeight });
+      // loadedmetadataだけだとまだ映像フレームが1枚もデコードされておらず、
+      // 書き出し時に最初が黒画面/前の画像のままになることがあるため、
+      // 実際にフレームが描画可能になる loadeddata まで待つ。
+      let resolved = false;
+      const tryResolve = () => {
+        if(resolved) return;
+        resolved = true;
+        resolve({ type: 'video', el: v, width: v.videoWidth, height: v.videoHeight });
+      };
+      v.onloadeddata = tryResolve;
+      // 念のため、loadeddataが発火しない環境向けのフォールバック
+      v.onloadedmetadata = () => { setTimeout(tryResolve, 300); };
       v.onerror = reject;
       v.src = url;
     });
@@ -1187,32 +1308,19 @@ function drawFrame(currentTime, imageTimeline, subtitleTimeline){
   ctx.fillStyle = '#000';
   ctx.fillRect(0,0,W,H);
 
-  // 背景(画像 or 動画、cover fit)
-  const seg = imageTimeline.find(s => currentTime >= s.start && currentTime < s.end) || imageTimeline[imageTimeline.length-1];
+  // 背景(画像 or 動画、cover fit)。セグメントの切り替わり付近は自然にクロスフェードする。
+  const TRANSITION_DURATION = 0.4; // 秒
+  const idx = imageTimeline.findIndex(s => currentTime >= s.start && currentTime < s.end);
+  const seg = idx >= 0 ? imageTimeline[idx] : imageTimeline[imageTimeline.length - 1];
   if(seg){
-    const media = seg.media;
-    const isVideo = media.type === 'video';
-    let scale = 1.0;
-    if(!isVideo){
-      const progress = Math.min(Math.max((currentTime - seg.start) / (seg.end - seg.start), 0), 1);
-      scale = 1.0 + 0.08 * progress;
-    } else if(media.el.paused){
-      media.el.play().catch(()=>{});
+    drawMediaSegment(ctx, seg, currentTime, W, H, 1.0);
+
+    const nextSeg = idx >= 0 ? imageTimeline[idx + 1] : null;
+    const timeToEnd = seg.end - currentTime;
+    if(nextSeg && timeToEnd < TRANSITION_DURATION){
+      const fadeInAlpha = 1 - (timeToEnd / TRANSITION_DURATION); // 0→1
+      drawMediaSegment(ctx, nextSeg, nextSeg.start, W, H, fadeInAlpha);
     }
-    const el = media.el;
-    const imgRatio = media.width / media.height;
-    const canvasRatio = W / H;
-    let drawW, drawH;
-    if(imgRatio > canvasRatio){
-      drawH = H * scale;
-      drawW = drawH * imgRatio;
-    } else {
-      drawW = W * scale;
-      drawH = drawW / imgRatio;
-    }
-    const dx = (W - drawW) / 2;
-    const dy = (H - drawH) / 2;
-    ctx.drawImage(el, dx, dy, drawW, drawH);
   }
 
   const sub = subtitleTimeline.find(s => currentTime >= s.start && currentTime < s.end);
@@ -1221,8 +1329,47 @@ function drawFrame(currentTime, imageTimeline, subtitleTimeline){
   }
 }
 
-const SUBTITLE_FONT_SIZE = 58;
-const SUBTITLE_LINE_HEIGHT = 74;
+// 1つの背景セグメント(画像 or 動画)を、指定した不透明度でcanvasに描画する
+function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
+  const media = seg.media;
+  const isVideo = media.type === 'video';
+  let scale = 1.0;
+  if(!isVideo){
+    const progress = Math.min(Math.max((currentTime - seg.start) / (seg.end - seg.start), 0), 1);
+    scale = 1.0 + 0.08 * progress;
+  } else {
+    // 動画は自前の時間で勝手に再生が進むため、シークバー操作などで
+    // 想定位置と大きくズレた時だけ強制的に合わせ直す(小さなズレは放置してカクつきを防ぐ)
+    const videoDuration = media.el.duration || 1;
+    const targetVideoTime = ((currentTime - seg.start) % videoDuration + videoDuration) % videoDuration;
+    if(Math.abs(media.el.currentTime - targetVideoTime) > 0.25){
+      try{ media.el.currentTime = targetVideoTime; }catch(e){}
+    }
+    if(media.el.paused){
+      media.el.play().catch(()=>{});
+    }
+  }
+  const el = media.el;
+  const imgRatio = media.width / media.height;
+  const canvasRatio = W / H;
+  let drawW, drawH;
+  if(imgRatio > canvasRatio){
+    drawH = H * scale;
+    drawW = drawH * imgRatio;
+  } else {
+    drawW = W * scale;
+    drawH = drawW / imgRatio;
+  }
+  const dx = (W - drawW) / 2;
+  const dy = (H - drawH) / 2;
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(el, dx, dy, drawW, drawH);
+  ctx.globalAlpha = prevAlpha;
+}
+
+const SUBTITLE_FONT_SIZE = 87;
+const SUBTITLE_LINE_HEIGHT = 111;
 
 // 字幕1つ分のレイアウト(何行に折り返され、それぞれどこに描かれるか)を計算する。
 // drawFrame(canvas描画)と、行ごとの編集オーバーレイの位置決めの両方で共通利用する。
@@ -1252,7 +1399,7 @@ function drawSubtitle(ctx, sub, W, H){
   ctx.textBaseline = 'middle';
   const letterSpacing = sub.letterSpacing || 0;
   const layout = computeSubtitleLayout(sub, W, H, ctx);
-  ctx.lineWidth = 13;
+  ctx.lineWidth = 20;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = '#000000';
   ctx.fillStyle = '#ffffff';
@@ -1286,6 +1433,35 @@ const subtitleTimelineScroll = document.getElementById('subtitleTimelineScroll')
 const subtitleTimelineRuler = document.getElementById('subtitleTimelineRuler');
 const subtitleTimelineTrack = document.getElementById('subtitleTimelineTrack');
 const PX_PER_SEC = 40;
+const timelinePlayhead = document.getElementById('timelinePlayhead');
+
+function seekToTimelineX(clientX){
+  const trackRect = subtitleTimelineTrack.getBoundingClientRect();
+  const xInTrack = clientX - trackRect.left;
+  const t = Math.max(0, xInTrack / PX_PER_SEC);
+  const maxT = checkNarrationBuffer ? checkNarrationBuffer.duration : t;
+  checkPreviewAudio.currentTime = Math.min(t, Math.max(0, maxT - 0.02));
+  redrawPreviewAtCurrentTime();
+}
+
+timelinePlayhead.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  timelinePlayhead.setPointerCapture(e.pointerId);
+  seekToTimelineX(e.clientX);
+  function onMove(ev){ seekToTimelineX(ev.clientX); }
+  function onUp(){
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  }
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+});
+
+// 目盛りやトラックの余白部分をクリックしても、その位置にシークできるようにする
+subtitleTimelineRuler.addEventListener('click', (e) => seekToTimelineX(e.clientX));
+subtitleTimelineTrack.addEventListener('click', (e) => {
+  if(e.target === subtitleTimelineTrack) seekToTimelineX(e.clientX);
+});
 
 function renderSubtitleTimeline(){
   const totalDuration = checkNarrationBuffer ? checkNarrationBuffer.duration : 0;
@@ -1504,7 +1680,7 @@ const subtitleWidthTargetLabel = document.getElementById('subtitleWidthTargetLab
 const subtitleFontRange = document.getElementById('subtitleFontRange');
 const subtitleFontLabel = document.getElementById('subtitleFontLabel');
 const subtitleFontTargetLabel = document.getElementById('subtitleFontTargetLabel');
-const CANVAS_DISPLAY_SCALE = 220 / 720; // canvasは常にネイティブ720x1280、表示220px幅
+const CANVAS_DISPLAY_SCALE = 220 / 1080; // canvasは常にネイティブ1080x1920、表示220px幅
 let overlayActiveIndex = -1;
 let overlayActiveLineIndex = -1; // 選択中の字幕の中で、さらにどの行を編集中か
 let overlayActiveImgName = '-';
@@ -1551,8 +1727,8 @@ fitOneLineBtn.addEventListener('click', () => {
   if(countLines() > 1){
     // 横幅を最大まで広げても収まらない場合、文字間隔を少しずつ詰める(最大-40pxまで)
     let spacing = 0;
-    while(countLines() > 1 && spacing > -40){
-      spacing -= 2;
+    while(countLines() > 1 && spacing > -60){
+      spacing -= 3;
       row.letterSpacing = spacing;
     }
   }
@@ -1595,7 +1771,7 @@ function rebuildLineOverlays(){
     input.dataset.manualIndex = lineInfo.manualIndex;
     input.dataset.lineIdx = lineIdx;
     const topPercent = (lineInfo.y / H) * 100;
-    const boxWidthNative = lineInfo.width + 40; // クリックしやすいよう少し余裕を持たせる
+    const boxWidthNative = lineInfo.width + 60; // クリックしやすいよう少し余裕を持たせる
     const widthPercent = (boxWidthNative / W) * 100;
     const heightPercent = (SUBTITLE_LINE_HEIGHT * 0.85 / H) * 100;
     input.style.cssText = `position:absolute;top:${topPercent}%;left:50%;transform:translate(-50%,-50%);width:${widthPercent}%;height:${heightPercent}%;background:transparent;color:transparent;caret-color:#ff3b30;border:2px solid #ff3b30;border-radius:4px;text-align:center;font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;font-weight:bold;font-size:${SUBTITLE_FONT_SIZE * CANVAS_DISPLAY_SCALE}px;letter-spacing:${(row.letterSpacing||0) * CANVAS_DISPLAY_SCALE}px;padding:0;box-sizing:border-box;z-index:5;pointer-events:auto;`;
@@ -1648,6 +1824,15 @@ function redrawPreviewAtCurrentTime(){
   const t = checkPreviewAudio.currentTime || 0;
   const { subTimeline, imgTimeline } = getPreviewTimelines();
   drawFrame(t, imgTimeline, subTimeline);
+
+  // タイムライン上のプレイヘッド(再生位置を示す縦線)を更新
+  const playheadX = 4 + t * PX_PER_SEC;
+  timelinePlayhead.style.left = playheadX + 'px';
+  const scrollLeft = subtitleTimelineScroll.scrollLeft;
+  const visibleWidth = subtitleTimelineScroll.clientWidth;
+  if(playheadX < scrollLeft || playheadX > scrollLeft + visibleWidth - 20){
+    subtitleTimelineScroll.scrollLeft = playheadX - visibleWidth / 2;
+  }
 
   const activeSub = subTimeline.findIndex(s => t >= s.start && t < s.end);
   const activeImg = imgTimeline.findIndex(s => t >= s.start && t < s.end);
@@ -1831,7 +2016,11 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
     let mimeType = mimeCandidates.find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
     const isMp4 = mimeType.startsWith('video/mp4');
 
-    const recorder = new MediaRecorder(combinedStream, { mimeType });
+    const recorder = new MediaRecorder(combinedStream, {
+      mimeType,
+      videoBitsPerSecond: 20_000_000, // 20Mbps。添付動画に近い画質をできるだけ維持するため高めに設定
+      audioBitsPerSecond: 192_000
+    });
     const chunks = [];
     recorder.ondataavailable = (e) => { if(e.data.size > 0) chunks.push(e.data); };
 
