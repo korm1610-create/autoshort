@@ -604,7 +604,7 @@ const promptStatus = document.getElementById('promptStatus');
 const promptOutput = document.getElementById('promptOutput');
 const copyPromptBtn = document.getElementById('copyPromptBtn');
 const promptList = document.getElementById('promptList');
-const IMAGE_STYLE = "cute cozy anime illustration style, clean line art, warm lighting, Edo period Japan";
+const IMAGE_STYLE = "bold Japanese manga/anime illustration style with EXTRA THICK, heavy black ink outlines (like a manga cover or character design sheet, thick confident linework, not thin or delicate lines), rich deeply saturated vivid colors, strong high-contrast cel-shading, dynamic and expressive, highly detailed backgrounds, polished professional illustration finish — absolutely NOT flat, NOT pale, NOT washed out, NOT thin-lined, NOT low-detail. Edo period Japan setting";
 const characterName = document.getElementById('characterName');
 const characterDesc = document.getElementById('characterDesc');
 const comparisonSubject = document.getElementById('comparisonSubject');
@@ -1035,7 +1035,7 @@ genPromptBtn.addEventListener('click', async () => {
   const promptLines = scenes.map((sceneText, i) => {
     const camera = CAMERA_WORK[i % CAMERA_WORK.length];
     const hookPart = i === 0
-      ? ` This is the HOOK (opening scene) that must grab the viewer's attention — no matter what the character is doing, give them a strongly shocked/surprised facial expression (wide-open eyes, open mouth, eyebrows raised) to create an eye-catching thumbnail-like moment.`
+      ? ` This is the HOOK (opening scene) that must grab the viewer's attention — no matter what the character is doing, give them a strongly shocked/surprised facial expression (wide-open eyes, open mouth, eyebrows raised) to create an eye-catching thumbnail-like moment. IMPORTANT composition note: since a subtitle caption will be overlaid across the vertical center of this image afterward, position the character's face and head in the UPPER HALF of the frame (above the vertical center), with the body/hands lower — do NOT place the face in the center or lower-center of the frame.`
       : '';
     return `${i+1}. Output size: 1080x1920px (YouTube Shorts / TikTok vertical format). ${camera}. ${style}. This is scene ${i+1} of ${scenes.length} in a continuous story — depict this part of the story matching this description (originally in Japanese): "${sceneText}".${hookPart}${charPart} Do not add any subtitles, captions, on-screen text, speech bubbles, or text overlays of any kind — the image must stay completely text-free, since captions will be added separately afterward. Also no watermark, no logos.`;
   });
@@ -1171,6 +1171,11 @@ function loadMedia(file){
       v.loop = true;
       v.playsInline = true;
       v.preload = 'auto';
+      // 画面上に一切存在しない(DOM外の)video要素だと、ブラウザによっては
+      // 再生中のフレーム更新が止まってしまうことがあるため、
+      // 見えない形で実際のページ内に配置しておく。
+      v.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none;';
+      document.body.appendChild(v);
       // loadedmetadataだけだとまだ映像フレームが1枚もデコードされておらず、
       // 書き出し時に最初が黒画面/前の画像のままになることがあるため、
       // 実際にフレームが描画可能になる loadeddata まで待つ。
@@ -1178,6 +1183,10 @@ function loadMedia(file){
       const tryResolve = () => {
         if(resolved) return;
         resolved = true;
+        // 使う直前ではなく、読み込めた時点で先に再生を始めておく
+        // (見えない状態でループ再生させておくことで、実際に描画する時点で
+        // 再生が確実に始まっている状態にする)
+        v.play().catch(()=>{});
         resolve({ type: 'video', el: v, width: v.videoWidth, height: v.videoHeight });
       };
       v.onloadeddata = tryResolve;
@@ -1338,12 +1347,17 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
     const progress = Math.min(Math.max((currentTime - seg.start) / (seg.end - seg.start), 0), 1);
     scale = 1.0 + 0.08 * progress;
   } else {
-    // 動画は自前の時間で勝手に再生が進むため、シークバー操作などで
-    // 想定位置と大きくズレた時だけ強制的に合わせ直す(小さなズレは放置してカクつきを防ぐ)
+    // 動画は自前の時間で勝手に再生が進む。毎フレーム細かく補正すると
+    // シークが完了する前に次のシークが割り込み、映像が止まって見えてしまうため、
+    // 「このシーンに入った最初の1回」だけ合わせ、あとは自然な再生に任せる。
+    // (プレビューは毎回タイムラインを作り直すため、状態は素材(media)側に記憶させる)
     const videoDuration = media.el.duration || 1;
     const targetVideoTime = ((currentTime - seg.start) % videoDuration + videoDuration) % videoDuration;
-    if(Math.abs(media.el.currentTime - targetVideoTime) > 0.25){
+    const drift = Math.abs(media.el.currentTime - targetVideoTime);
+    const isNewSegmentContext = media._activeSegStart !== seg.start;
+    if(isNewSegmentContext || drift > 1.0){
       try{ media.el.currentTime = targetVideoTime; }catch(e){}
+      media._activeSegStart = seg.start;
     }
     if(media.el.paused){
       media.el.play().catch(()=>{});
