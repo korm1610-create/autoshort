@@ -353,7 +353,7 @@
   </div>
 
   <div id="canvasWrap">
-    <canvas id="canvas" width="1080" height="1920"></canvas>
+    <canvas id="canvas" width="720" height="1280"></canvas>
   </div>
 
   <button id="renderBtn">🎬 動画を書き出す</button>
@@ -1349,16 +1349,20 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
   } else {
     // 動画は自前の時間で勝手に再生が進む。毎フレーム細かく補正すると
     // シークが完了する前に次のシークが割り込み、映像が止まって見えてしまうため、
-    // 「このシーンに入った最初の1回」だけ合わせ、あとは自然な再生に任せる。
-    // (プレビューは毎回タイムラインを作り直すため、状態は素材(media)側に記憶させる)
-    const videoDuration = media.el.duration || 1;
-    const targetVideoTime = ((currentTime - seg.start) % videoDuration + videoDuration) % videoDuration;
-    const drift = Math.abs(media.el.currentTime - targetVideoTime);
+    // 「このシーンに入った最初の1回」と「シーク(スクラブ)で時間が飛んだ時」だけ
+    // 動画の位置を合わせ、それ以外の通常再生時は一切触らず動画本来の再生に完全に任せる。
+    // (動画の長さで一定間隔ごとに補正すると、動画自身のループのタイミングとズレて
+    //  誤って「ズレた」と判定してしまい、それが定期的なガタつきの原因になっていた)
+    const lastT = media._lastCurrentTime;
     const isNewSegmentContext = media._activeSegStart !== seg.start;
-    if(isNewSegmentContext || drift > 1.0){
+    const jumped = isNewSegmentContext || lastT === undefined || Math.abs(currentTime - lastT) > 0.5;
+    if(jumped){
+      const videoDuration = media.el.duration || 1;
+      const targetVideoTime = ((currentTime - seg.start) % videoDuration + videoDuration) % videoDuration;
       try{ media.el.currentTime = targetVideoTime; }catch(e){}
       media._activeSegStart = seg.start;
     }
+    media._lastCurrentTime = currentTime;
     if(media.el.paused){
       media.el.play().catch(()=>{});
     }
@@ -1382,8 +1386,8 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
   ctx.globalAlpha = prevAlpha;
 }
 
-const SUBTITLE_FONT_SIZE = 87;
-const SUBTITLE_LINE_HEIGHT = 111;
+const SUBTITLE_FONT_SIZE = 58;
+const SUBTITLE_LINE_HEIGHT = 74;
 
 // 字幕1つ分のレイアウト(何行に折り返され、それぞれどこに描かれるか)を計算する。
 // drawFrame(canvas描画)と、行ごとの編集オーバーレイの位置決めの両方で共通利用する。
@@ -1413,7 +1417,7 @@ function drawSubtitle(ctx, sub, W, H){
   ctx.textBaseline = 'middle';
   const letterSpacing = sub.letterSpacing || 0;
   const layout = computeSubtitleLayout(sub, W, H, ctx);
-  ctx.lineWidth = 20;
+  ctx.lineWidth = 13;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = '#000000';
   ctx.fillStyle = '#ffffff';
@@ -1518,10 +1522,6 @@ function renderSubtitleTimeline(){
       handle.setPointerCapture(e.pointerId);
       const startX = e.clientX;
       const initialDuration = row.duration;
-
-      // ドラッグ開始と同時に、このシーンをプレビューに表示する
-      checkPreviewAudio.currentTime = start + 0.01;
-      redrawPreviewAtCurrentTime();
 
       function onMove(ev){
         const deltaSec = (ev.clientX - startX) / PX_PER_SEC;
@@ -1694,7 +1694,7 @@ const subtitleWidthTargetLabel = document.getElementById('subtitleWidthTargetLab
 const subtitleFontRange = document.getElementById('subtitleFontRange');
 const subtitleFontLabel = document.getElementById('subtitleFontLabel');
 const subtitleFontTargetLabel = document.getElementById('subtitleFontTargetLabel');
-const CANVAS_DISPLAY_SCALE = 220 / 1080; // canvasは常にネイティブ1080x1920、表示220px幅
+const CANVAS_DISPLAY_SCALE = 220 / 720; // canvasは常にネイティブ720x1280、表示220px幅
 let overlayActiveIndex = -1;
 let overlayActiveLineIndex = -1; // 選択中の字幕の中で、さらにどの行を編集中か
 let overlayActiveImgName = '-';
