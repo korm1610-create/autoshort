@@ -1355,7 +1355,7 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
     //  誤って「ズレた」と判定してしまい、それが定期的なガタつきの原因になっていた)
     const lastT = media._lastCurrentTime;
     const isNewSegmentContext = media._activeSegStart !== seg.start;
-    const jumped = isNewSegmentContext || lastT === undefined || Math.abs(currentTime - lastT) > 0.5;
+    const jumped = isNewSegmentContext || lastT === undefined || Math.abs(currentTime - lastT) > 1.0;
     if(jumped){
       const videoDuration = media.el.duration || 1;
       const targetVideoTime = ((currentTime - seg.start) % videoDuration + videoDuration) % videoDuration;
@@ -2045,8 +2045,13 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
     setStatus('録画中... 0%');
     // 開始前に最初のフレームを描いておく(録画開始直後が黒画面にならないように)
     drawFrame(0, imageTimeline, subtitleTimeline);
+    // 先頭が動画素材の場合、シークとデコードが実際に落ち着くまで少し待ってから録画を始める
+    // (待たずに録画を始めると、最初の1秒前後だけガタつくことがあるため)
+    const firstSeg = imageTimeline[0];
+    const firstIsVideo = firstSeg && firstSeg.media && firstSeg.media.type === 'video';
+    await new Promise(r => setTimeout(r, firstIsVideo ? 400 : 50));
 
-    const startTime = audioCtx.currentTime + 0.05;
+    const startTime = audioCtx.currentTime + 0.2;
     narrationSource.start(startTime);
     if(bgmSource) bgmSource.start(startTime);
     recorder.start();
