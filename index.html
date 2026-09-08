@@ -2347,36 +2347,6 @@ function audioBufferToWav(buffer){
 
 // 動画セグメントの、指定した時刻に対応するフレームを確実に表示させてから解決する
 // (リアルタイム再生と違い、時間制限がないのでシークの完了をきちんと待てる)
-function seekVideoAndWait(seg, currentTime){
-  return new Promise((resolve) => {
-    const media = seg.media;
-    if(!media || media.type !== 'video'){ resolve(); return; }
-    const trimStart = seg.trimStart || 0;
-    const rate = seg.playbackRate || 1;
-    const videoDuration = media.el.duration || 1;
-    const trimLength = seg.trimLength || (videoDuration - trimStart);
-    const availableLength = Math.max(0.1, Math.min(trimLength, videoDuration - trimStart));
-    const elapsedInSeg = (currentTime - seg.start) * rate;
-    const targetVideoTime = trimStart + (((elapsedInSeg % availableLength) + availableLength) % availableLength);
-
-    if(Math.abs(media.el.currentTime - targetVideoTime) < 0.01){
-      resolve();
-      return;
-    }
-    let done = false;
-    const finish = () => {
-      if(done) return;
-      done = true;
-      media.el.removeEventListener('seeked', finish);
-      resolve();
-    };
-    media.el.addEventListener('seeked', finish);
-    try{ media.el.pause(); }catch(e){}
-    try{ media.el.currentTime = targetVideoTime; }catch(e){ finish(); }
-    setTimeout(finish, 800); // 万一seekedが発火しない環境向けのフォールバック
-  });
-}
-
 async function startRenderOffline({ narrationBuffer, bgmBuffer, subtitleTimeline, imageTimeline, totalDuration }){
   try{
     resultWrap.style.display = 'none';
@@ -2408,23 +2378,83 @@ async function startRenderOffline({ narrationBuffer, bgmBuffer, subtitleTimeline
     const wavBytes = audioBufferToWav(mixedBuffer);
     await ffmpeg.writeFile('mixed.wav', wavBytes);
 
-    // ② 1フレームずつ、確実に正しい内容を描画してPNGとして書き出す
-    const FPS = 24;
-    const totalFrames = Math.max(1, Math.ceil(totalDuration * FPS));
-    for(let f = 0; f < totalFrames; f++){
-      const t = Math.min(f / FPS, totalDuration - 0.001);
-      const seg = imageTimeline.find(s => t >= s.start && t < s.end) || imageTimeline[imageTimeline.length - 1];
-      if(seg){
-        await seekVideoAndWait(seg, t);
-      }
-      drawFrame(t, imageTimeline, subtitleTimeline);
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-      const buf = new Uint8Array(await blob.arrayBuffer());
-      await ffmpeg.writeFile(`frame${String(f).padStart(5,'0')}.png`, buf);
-      if(f % 4 === 0 || f === totalFrames - 1){
-        setStatus(`フレームを書き出し中... ${Math.round((f/totalFrames)*100)}% (${f}/${totalFrames}枚)`);
+function waitForVideoAtLeast(media, targetTime, timeoutMs){
+  return new Promise((resolve) => {
+    const start = performance.now();
+    function check(){
+      if(media.el.currentTime >= targetTime - 0.005 || performance.now() - start > timeoutMs){
+        resolve();
+      } else {
+        requestAnimationFrame(check);
       }
     }
+    check();
+  });
+}
+
+function seekVideoTo(media, targetTime){
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if(done) return;
+      done = true;
+      media.el.removeEventListener('seeked', finish);
+      resolve();
+    };
+    media.el.addEventListener('seeked', finish);
+    try{ media.el.currentTime = targetTime; }catch(e){ finish(); }
+    setTimeout(finish, 800);
+  });
+}
+
+// ② 1フレームずつ、確実に正しい内容を描画してPNGとして書き出す。
+// 動画は「毎フレームごとにシーク」すると非常に遅くなるため、
+// セグメントが変わった時だけ位置合わせ+再生開始し、あとは連続再生の
+// 進み具合を待つだけにすることで大幅に高速化している。
+const FPS = 24;
+const totalFrames = Math.max(1, Math.ceil(totalDuration * FPS));
+let activeVideoSegIndex = -1;
+for(let f = 0; f < totalFrames; f++){
+  const t = Math.min(f / FPS, totalDuration - 0.001);
+  const segIndex = imageTimeline.findIndex(s => t >= s.start && t < s.end);
+  const seg = segIndex >= 0 ? imageTimeline[segIndex] : imageTimeline[imageTimeline.length - 1];
+  const isVideo = seg && seg.media && seg.media.type === 'video';
+
+  if(isVideo){
+    const media = seg.media;
+    const trimStart = seg.trimStart || 0;
+    const rate = seg.playbackRate || 1;
+    const videoDuration = media.el.duration || 1;
+    const trimLength = seg.trimLength || (videoDuration - trimStart);
+    const availableLength = Math.max(0.1, Math.min(trimLength, videoDuration - trimStart));
+    const elapsedInSeg = (t - seg.start) * rate;
+    const targetVideoTime = trimStart + (((elapsedInSeg % availableLength) + availableLength) % availableLength);
+
+    if(segIndex !== activeVideoSegIndex){
+      // このセグメントに入った最初の1回だけシークして再生を始める
+      try{ media.el.playbackRate = rate; }catch(e){}
+      await seekVideoTo(media, targetVideoTime);
+      try{ await media.el.play(); }catch(e){}
+      activeVideoSegIndex = segIndex;
+    } else if(targetVideoTime < media.el.currentTime - 0.05){
+      // トリム範囲の終わりでループする場合など、後ろに戻る必要がある時だけ再シーク
+      await seekVideoTo(media, targetVideoTime);
+    } else {
+      // 通常はシークせず、自然な再生が追いつくのを待つだけ(ここが高速化の要)
+      await waitForVideoAtLeast(media, targetVideoTime, 300);
+    }
+  } else {
+    activeVideoSegIndex = -1;
+  }
+
+  drawFrame(t, imageTimeline, subtitleTimeline);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  await ffmpeg.writeFile(`frame${String(f).padStart(5,'0')}.png`, buf);
+  if(f % 4 === 0 || f === totalFrames - 1){
+    setStatus(`フレームを書き出し中... ${Math.round((f/totalFrames)*100)}% (${f}/${totalFrames}枚)`);
+  }
+}
 
     // ③ ffmpegでPNG連番+音声をまとめて動画にエンコード(リアルタイムではないのでじっくり高品質に)
     setStatus('動画にエンコード中...(少し時間がかかります)');
@@ -2433,7 +2463,7 @@ async function startRenderOffline({ narrationBuffer, bgmBuffer, subtitleTimeline
       '-i', 'frame%05d.png',
       '-i', 'mixed.wav',
       '-c:v', 'libx264',
-      '-preset', 'medium',
+      '-preset', 'veryfast',
       '-crf', '18',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac',
