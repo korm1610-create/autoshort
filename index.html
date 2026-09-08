@@ -2265,10 +2265,24 @@ function loadExternalScript(src){
 }
 
 let ffmpegInstance = null;
+async function urlToBlobURL(url, mimeType){
+  const resp = await fetch(url);
+  if(!resp.ok) throw new Error('ファイルの取得に失敗しました: ' + url);
+  const buf = await resp.arrayBuffer();
+  const blob = new Blob([buf], { type: mimeType });
+  return URL.createObjectURL(blob);
+}
+
 async function loadFFmpegIfNeeded(onProgress){
   if(ffmpegInstance) return ffmpegInstance;
+  const ffmpegBase = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
+  const coreBase = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+
   if(!window.FFmpegWASM){
-    await loadExternalScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js');
+    // ffmpeg.js本体もblob化してから読み込むことで、内部で使うワーカーが
+    // 別サイト(unpkg.com)から直接読み込まれてブロックされるのを防ぐ
+    const ffmpegBlobURL = await urlToBlobURL(`${ffmpegBase}/ffmpeg.js`, 'text/javascript');
+    await loadExternalScript(ffmpegBlobURL);
   }
   const { FFmpeg } = window.FFmpegWASM;
   const ffmpeg = new FFmpeg();
@@ -2276,8 +2290,9 @@ async function loadFFmpegIfNeeded(onProgress){
     ffmpeg.on('progress', ({ progress }) => onProgress(progress));
   }
   await ffmpeg.load({
-    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js',
-    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+    coreURL: await urlToBlobURL(`${coreBase}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await urlToBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
+    classWorkerURL: await urlToBlobURL(`${ffmpegBase}/814.ffmpeg.js`, 'text/javascript'),
   });
   ffmpegInstance = ffmpeg;
   return ffmpeg;
