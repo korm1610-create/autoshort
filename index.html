@@ -263,8 +263,8 @@
     <div class="thumbs" id="imagePreview"></div>
     <div class="hint">GPTで作った画像と、Seadance等で作った動画クリップを混ぜてOK。動画の長さに合わせて自動で均等に切り替わります(画像は軽いズーム演出つき、動画はそのまま再生されます)。</div>
 
-    <button type="button" id="genVideoPromptBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid var(--ai);background:transparent;color:#8ba3d1;font-weight:bold;cursor:pointer;">🎬 Canva AI動画用プロンプトを作る</button>
-    <div class="hint" style="margin-top:6px;">アップロードした画像を、Canva AIの画像→動画機能で動かすための指示文(英語)を1枚ずつ作ります。①の台本の流れに合わせて、シーン1は驚き系の掴み、以降はストーリーが伝わるカメラワークになります。</div>
+    <button type="button" id="genVideoPromptBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid var(--ai);background:transparent;color:#8ba3d1;font-weight:bold;cursor:pointer;">🎬 AI動画用プロンプトを作る</button>
+    <div class="hint" style="margin-top:6px;">アップロードした画像を、Canva AIやドロップショットAIなどの画像→動画機能で動かすための指示文(英語)を1枚ずつ作ります。①の台本の流れに合わせて、シーン1は驚き系の掴み、以降はストーリーが伝わるカメラワークになります。</div>
     <div id="videoPromptStatus" class="hint" style="text-align:center;"></div>
     <div id="videoPromptList" style="margin-top:10px;"></div>
   </div>
@@ -968,7 +968,9 @@ genVideoPromptBtn.addEventListener('click', () => {
     const sceneNote = sceneText
       ? ` This corresponds to this part of the story (originally in Japanese): "${sceneText}".`
       : '';
-    const promptText = `${i+1}. Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Do not add any subtitles, captions, on-screen text, speech bubbles, or text overlays of any kind — the video must stay completely text-free, since captions will be added separately afterward. Also no watermark, no logos.`;
+    const promptText = `${i+1}. [CRITICAL RULE — MUST FOLLOW]: This video must contain ABSOLUTELY NO text, letters, captions, subtitles, speech bubbles, manga-style sound effect text, or any written characters of any kind, anywhere in the frame, at any point during the clip. This is the single most important rule. Captions will be added separately afterward in a different tool.
+
+Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Reminder: no text, no speech bubbles, no captions, no watermark, no logos — the video must stay completely text-free.`;
 
     const card = document.createElement('div');
     card.style.cssText = 'background:#0a1220;border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;';
@@ -999,7 +1001,7 @@ genVideoPromptBtn.addEventListener('click', () => {
     videoPromptList.appendChild(card);
   });
 
-  videoPromptStatus.textContent = '完成! Canva AIの画像→動画機能に、対応する画像とこのプロンプトをそれぞれセットしてください。';
+  videoPromptStatus.textContent = '完成! Canva AIやドロップショットAIなどの画像→動画機能に、対応する画像とこのプロンプトをそれぞれセットしてください。';
 });
 
 genPromptBtn.addEventListener('click', async () => {
@@ -1774,8 +1776,10 @@ function renderMediaTimeline(){
     const block = document.createElement('div');
     block.dataset.index = i;
     block.style.cssText = `position:absolute;left:${start*PX_PER_SEC}px;width:${Math.max(row.duration*PX_PER_SEC,20)}px;top:0;height:40px;background:${isVideo ? '#4a9eff' : (i%2===0?'var(--accent2)':'#e0bd5a')};border-radius:5px;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,0.3);`;
-    block.innerHTML = `<div style="padding:4px 6px;font-size:11px;color:${isVideo ? '#fff' : '#0d1526'};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;">${isVideo ? '🎬 ' : ''}${file ? file.name : ('素材'+(i+1))}</div>`;
+    block.innerHTML = `<div style="padding:4px 6px;font-size:11px;color:${isVideo ? '#fff' : '#0d1526'};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;">${isVideo ? '🎬 ' : ''}${file ? file.name : ('素材'+(i+1))}</div>
+      <div class="mediaResizeHandle" style="position:absolute;right:0;top:0;width:8px;height:100%;cursor:ew-resize;background:rgba(0,0,0,0.15);"></div>`;
     block.addEventListener('click', (e) => {
+      if(e.target.classList.contains('mediaResizeHandle')) return;
       const rect = block.getBoundingClientRect();
       const clickRatio = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0;
       const targetTime = start + Math.max(0, Math.min(row.duration - 0.05, clickRatio * row.duration));
@@ -1783,6 +1787,42 @@ function renderMediaTimeline(){
       selectMediaIndex(i);
       redrawPreviewAtCurrentTime();
     });
+
+    const mediaHandle = block.querySelector('.mediaResizeHandle');
+    mediaHandle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      mediaHandle.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const initialDuration = row.duration;
+      function onMove(ev){
+        const deltaSec = (ev.clientX - startX) / PX_PER_SEC;
+        row.duration = Math.max(0.3, initialDuration + deltaSec);
+        const newWidth = Math.max(row.duration * PX_PER_SEC, 20);
+        block.style.width = newWidth + 'px';
+        let shiftCum = start + row.duration;
+        for(let j = i + 1; j < imageRows.length; j++){
+          const sib = mediaTimelineTrack.children[j];
+          if(sib){ sib.style.left = (shiftCum * PX_PER_SEC) + 'px'; }
+          shiftCum += imageRows[j].duration;
+        }
+        const newTotalWidth = Math.max(shiftCum * PX_PER_SEC, 200);
+        mediaTimelineTrack.style.width = newTotalWidth + 'px';
+        mediaTimelineRuler.style.width = newTotalWidth + 'px';
+        updateImageTotal();
+        drawCurrentPreviewFrame();
+      }
+      function onUp(){
+        mediaHandle.releasePointerCapture(e.pointerId);
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        renderMediaTimeline();
+        redrawPreviewAtCurrentTime();
+      }
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+
     mediaTimelineTrack.appendChild(block);
   });
 
@@ -2082,7 +2122,7 @@ renderBtn.addEventListener('click', async () => {
   }
   allMediaFiles = [...imageFiles, ...canvaVideoFiles];
   if(allMediaFiles.length === 0){
-    alert('② 背景画像・動画、またはCanvaの動画を1つ以上追加してください');
+    alert('② 背景画像・動画、または④で追加した動画を1つ以上追加してください');
     return;
   }
 
