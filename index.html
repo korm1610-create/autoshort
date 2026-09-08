@@ -426,6 +426,7 @@
         <button type="button" id="checkModalCancel" style="flex:1;padding:12px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;">キャンセル</button>
         <button type="button" id="checkModalConfirm" style="flex:1;padding:12px;border-radius:10px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0d1526;font-weight:bold;cursor:pointer;">この内容で書き出す</button>
       </div>
+      <button type="button" id="renderHQBtn" style="margin-top:8px;width:100%;padding:12px;border-radius:10px;border:1px solid #39ff6a;background:transparent;color:#39ff6a;font-weight:bold;cursor:pointer;">🎬 高品質で書き出す(時間がかかります・毎回同じ滑らかさになります)</button>
     </div>
   </div>
 
@@ -2110,6 +2111,31 @@ function redrawPreviewAtCurrentTime(){
 checkPreviewAudio.addEventListener('timeupdate', redrawPreviewAtCurrentTime);
 checkPreviewAudio.addEventListener('seeked', redrawPreviewAtCurrentTime);
 
+// 音声のtimeupdateイベントだけに頼ると更新頻度が低く(ブラウザによっては1秒に数回程度)、
+// プレビューがガクガクして見えてしまうため、再生中はrequestAnimationFrameで
+// 書き出し時と同じくらい滑らかにプレビューを更新する。
+let previewRafId = null;
+function previewRafLoop(){
+  if(!checkPreviewAudio.paused){
+    redrawPreviewAtCurrentTime();
+    previewRafId = requestAnimationFrame(previewRafLoop);
+  } else {
+    previewRafId = null;
+  }
+}
+checkPreviewAudio.addEventListener('play', () => {
+  if(previewRafId === null){
+    previewRafId = requestAnimationFrame(previewRafLoop);
+  }
+});
+checkPreviewAudio.addEventListener('pause', () => {
+  if(previewRafId !== null){
+    cancelAnimationFrame(previewRafId);
+    previewRafId = null;
+  }
+  redrawPreviewAtCurrentTime();
+});
+
 renderBtn.addEventListener('click', async () => {
   const narrationFile = narrationInput.files[0];
   if(narrationMode === 'upload' && !narrationFile){
@@ -2177,18 +2203,25 @@ checkModalCancel.addEventListener('click', () => {
   renderBtn.disabled = false;
 });
 
-checkModalConfirm.addEventListener('click', () => {
-  checkPreviewAudio.pause();
-  scriptEl.value = checkScriptText.value;
-  checkModalOverlay.style.display = 'none';
-  canvasWrap.appendChild(canvas);
-
+function buildFinalTimelines(){
   const totalDuration = checkNarrationBuffer.duration;
   const subtitleTimeline = timelineFromRows(subtitleRows, r => ({ text: r.text, widthRatio: r.widthRatio, letterSpacing: r.letterSpacing }));
   const imageTimeline = timelineFromRows(imageRows, (r, i) => ({ media: checkImages[i], trimStart: r.trimStart||0, trimLength: r.trimLength||null, playbackRate: r.playbackRate||1 }));
   // 最後のセグメントは音声の長さぴったりに揃える(ズレ防止)
   if(subtitleTimeline.length) subtitleTimeline[subtitleTimeline.length-1].end = totalDuration;
   if(imageTimeline.length) imageTimeline[imageTimeline.length-1].end = totalDuration;
+  return { totalDuration, subtitleTimeline, imageTimeline };
+}
+
+const renderHQBtn = document.getElementById('renderHQBtn');
+
+checkModalConfirm.addEventListener('click', () => {
+  checkPreviewAudio.pause();
+  scriptEl.value = checkScriptText.value;
+  checkModalOverlay.style.display = 'none';
+  canvasWrap.appendChild(canvas);
+
+  const { totalDuration, subtitleTimeline, imageTimeline } = buildFinalTimelines();
 
   startRender({
     audioCtx: checkAudioCtx,
@@ -2199,6 +2232,225 @@ checkModalConfirm.addEventListener('click', () => {
     totalDuration
   });
 });
+
+renderHQBtn.addEventListener('click', () => {
+  checkPreviewAudio.pause();
+  scriptEl.value = checkScriptText.value;
+  checkModalOverlay.style.display = 'none';
+  canvasWrap.appendChild(canvas);
+  renderBtn.disabled = true;
+  renderHQBtn.disabled = true;
+
+  const { totalDuration, subtitleTimeline, imageTimeline } = buildFinalTimelines();
+
+  startRenderOffline({
+    narrationBuffer: checkNarrationBuffer,
+    bgmBuffer: checkBgmBuffer,
+    subtitleTimeline,
+    imageTimeline,
+    totalDuration
+  });
+});
+
+// ===== 高品質書き出し(ffmpeg.wasmでリアルタイムではなくじっくりエンコード) =====
+
+function loadExternalScript(src){
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('スクリプトの読み込みに失敗しました: ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+let ffmpegInstance = null;
+async function loadFFmpegIfNeeded(onProgress){
+  if(ffmpegInstance) return ffmpegInstance;
+  if(!window.FFmpegWASM){
+    await loadExternalScript('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js');
+  }
+  const { FFmpeg } = window.FFmpegWASM;
+  const ffmpeg = new FFmpeg();
+  if(onProgress){
+    ffmpeg.on('progress', ({ progress }) => onProgress(progress));
+  }
+  await ffmpeg.load({
+    coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js',
+    wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+  });
+  ffmpegInstance = ffmpeg;
+  return ffmpeg;
+}
+
+// AudioBuffer(Web Audio) → WAVファイルのバイト列に変換する定番の実装
+function audioBufferToWav(buffer){
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const bitDepth = 16;
+  const numFrames = buffer.length;
+
+  const channels = [];
+  for(let c = 0; c < numChannels; c++) channels.push(buffer.getChannelData(c));
+
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const dataSize = numFrames * blockAlign;
+  const bufferSize = 44 + dataSize;
+
+  const arrayBuffer = new ArrayBuffer(bufferSize);
+  const view = new DataView(arrayBuffer);
+
+  function writeString(offset, str){
+    for(let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for(let i = 0; i < numFrames; i++){
+    for(let c = 0; c < numChannels; c++){
+      const sample = Math.max(-1, Math.min(1, channels[c][i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+  return new Uint8Array(arrayBuffer);
+}
+
+// 動画セグメントの、指定した時刻に対応するフレームを確実に表示させてから解決する
+// (リアルタイム再生と違い、時間制限がないのでシークの完了をきちんと待てる)
+function seekVideoAndWait(seg, currentTime){
+  return new Promise((resolve) => {
+    const media = seg.media;
+    if(!media || media.type !== 'video'){ resolve(); return; }
+    const trimStart = seg.trimStart || 0;
+    const rate = seg.playbackRate || 1;
+    const videoDuration = media.el.duration || 1;
+    const trimLength = seg.trimLength || (videoDuration - trimStart);
+    const availableLength = Math.max(0.1, Math.min(trimLength, videoDuration - trimStart));
+    const elapsedInSeg = (currentTime - seg.start) * rate;
+    const targetVideoTime = trimStart + (((elapsedInSeg % availableLength) + availableLength) % availableLength);
+
+    if(Math.abs(media.el.currentTime - targetVideoTime) < 0.01){
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if(done) return;
+      done = true;
+      media.el.removeEventListener('seeked', finish);
+      resolve();
+    };
+    media.el.addEventListener('seeked', finish);
+    try{ media.el.pause(); }catch(e){}
+    try{ media.el.currentTime = targetVideoTime; }catch(e){ finish(); }
+    setTimeout(finish, 800); // 万一seekedが発火しない環境向けのフォールバック
+  });
+}
+
+async function startRenderOffline({ narrationBuffer, bgmBuffer, subtitleTimeline, imageTimeline, totalDuration }){
+  try{
+    resultWrap.style.display = 'none';
+    setStatus('高品質エンコーダーを読み込み中...(初回のみ時間がかかります、しばらくお待ちください)');
+
+    const ffmpeg = await loadFFmpegIfNeeded((p) => {
+      setStatus('動画に変換中... ' + Math.round(p * 100) + '%');
+    });
+
+    // ① 音声をオフライン(実時間に縛られず)でミックス
+    setStatus('音声をミックス中...');
+    const sampleRate = 44100;
+    const offlineCtx = new OfflineAudioContext(2, Math.ceil(totalDuration * sampleRate), sampleRate);
+    const narrSrc = offlineCtx.createBufferSource();
+    narrSrc.buffer = narrationBuffer;
+    narrSrc.connect(offlineCtx.destination);
+    narrSrc.start(0);
+    let bgmSrc = null;
+    if(bgmBuffer){
+      bgmSrc = offlineCtx.createBufferSource();
+      bgmSrc.buffer = bgmBuffer;
+      bgmSrc.loop = true;
+      const bgmGain = offlineCtx.createGain();
+      bgmGain.gain.value = parseFloat(bgmVolume.value);
+      bgmSrc.connect(bgmGain).connect(offlineCtx.destination);
+      bgmSrc.start(0);
+    }
+    const mixedBuffer = await offlineCtx.startRendering();
+    const wavBytes = audioBufferToWav(mixedBuffer);
+    await ffmpeg.writeFile('mixed.wav', wavBytes);
+
+    // ② 1フレームずつ、確実に正しい内容を描画してPNGとして書き出す
+    const FPS = 24;
+    const totalFrames = Math.max(1, Math.ceil(totalDuration * FPS));
+    for(let f = 0; f < totalFrames; f++){
+      const t = Math.min(f / FPS, totalDuration - 0.001);
+      const seg = imageTimeline.find(s => t >= s.start && t < s.end) || imageTimeline[imageTimeline.length - 1];
+      if(seg){
+        await seekVideoAndWait(seg, t);
+      }
+      drawFrame(t, imageTimeline, subtitleTimeline);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      await ffmpeg.writeFile(`frame${String(f).padStart(5,'0')}.png`, buf);
+      if(f % 4 === 0 || f === totalFrames - 1){
+        setStatus(`フレームを書き出し中... ${Math.round((f/totalFrames)*100)}% (${f}/${totalFrames}枚)`);
+      }
+    }
+
+    // ③ ffmpegでPNG連番+音声をまとめて動画にエンコード(リアルタイムではないのでじっくり高品質に)
+    setStatus('動画にエンコード中...(少し時間がかかります)');
+    await ffmpeg.exec([
+      '-framerate', String(FPS),
+      '-i', 'frame%05d.png',
+      '-i', 'mixed.wav',
+      '-c:v', 'libx264',
+      '-preset', 'medium',
+      '-crf', '18',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-shortest',
+      'output.mp4'
+    ]);
+
+    const data = await ffmpeg.readFile('output.mp4');
+    const blob = new Blob([data.buffer], { type: 'video/mp4' });
+    const url = URL.createObjectURL(blob);
+    resultVideo.src = url;
+    downloadLink.href = url;
+    downloadLink.download = 'edo-short-hq.mp4';
+    downloadLink.textContent = '⬇ ダウンロード(.mp4)';
+    formatNote.textContent = '※ 高品質モード(MP4/H.264)で書き出しました。1フレームずつ確実に描画してからエンコードしているので、パソコンの調子に左右されず、毎回同じ滑らかさになります。';
+    resultWrap.style.display = 'block';
+    setStatus('完成! 🎉');
+    renderBtn.disabled = false;
+    renderHQBtn.disabled = false;
+
+    // 後片付け(メモリ解放)
+    for(let f = 0; f < totalFrames; f++){
+      try{ await ffmpeg.deleteFile(`frame${String(f).padStart(5,'0')}.png`); }catch(e){}
+    }
+  } catch(err){
+    console.error(err);
+    setStatus('エラーが発生しました: ' + err.message);
+    renderBtn.disabled = false;
+    renderHQBtn.disabled = false;
+  }
+}
 
 async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimeline, imageTimeline, totalDuration }){
   try{
