@@ -291,13 +291,13 @@
 
     <div id="existingCharPane" style="display:none;">
       <div class="hint" style="margin-top:0;margin-bottom:4px;">保存済みキャラクター(タップで呼び出せます)</div>
-      <div id="characterLibraryList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;padding-right:4px;"></div>
+      <div id="characterLibraryList" style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;padding-right:4px;"></div>
       <div class="hint" id="characterLibraryEmptyHint" style="text-align:center;">まだ保存済みのキャラクターがありません</div>
 
       <input type="text" id="existingCharacterName" placeholder="キャラクター名 例:カゲマル" style="width:100%;background:#0a1220;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px;font-size:13px;margin-top:10px;margin-bottom:8px;">
       <div class="hint" style="margin-top:0;margin-bottom:4px;">キャラクターシート画像を添付</div>
       <div id="charSheetDropZone" style="border:2px dashed var(--border);border-radius:10px;padding:16px;text-align:center;cursor:pointer;transition:border-color 0.15s, background 0.15s;">
-        <input type="file" id="existingCharSheet" accept="image/*" style="display:none;">
+        <input type="file" id="existingCharSheet" accept="image/*" multiple style="display:none;">
         <div id="charSheetDropText" class="hint" style="margin:0;">ここに画像をドラッグ&ドロップ<br>またはクリックして選択</div>
       </div>
       <div class="thumbs" id="existingCharPreview"></div>
@@ -2481,7 +2481,9 @@ let activeAutoSavedCharacterId = null; // 画像を選んでから、次に新�
 async function autoSaveCharacter(){
   const file = existingCharSheet.files[0];
   if(!file) return; // 画像がまだ無ければ何もしない(保存する内容がないため)
-  const name = existingCharacterName.value.trim() || '無題のキャラクター';
+  const fileName = file.name || '';
+  const defaultName = fileName.replace(/\.[^.]+$/, '') || '無題のキャラクター';
+  const name = existingCharacterName.value.trim() || defaultName;
   const notes = existingCharacterNotes.value.trim();
   try{
     const imageDataUrl = await fileToDataUrl(file);
@@ -2490,10 +2492,10 @@ async function autoSaveCharacter(){
       ? list.findIndex(c => c.id === activeAutoSavedCharacterId)
       : -1;
     if(existingIndex >= 0){
-      list[existingIndex] = { ...list[existingIndex], name, notes, imageDataUrl };
+      list[existingIndex] = { ...list[existingIndex], name, notes, imageDataUrl, fileName };
     } else {
       activeAutoSavedCharacterId = 'char_' + Date.now();
-      list.unshift({ id: activeAutoSavedCharacterId, name, notes, imageDataUrl, savedAt: Date.now() });
+      list.unshift({ id: activeAutoSavedCharacterId, name, notes, imageDataUrl, fileName, savedAt: Date.now() });
     }
     saveCharacterLibrary(list);
     renderCharacterLibrary();
@@ -2504,29 +2506,76 @@ async function autoSaveCharacter(){
   }
 }
 
+const PROTAGONIST_CHARACTER_KEY = 'edoShortsProtagonistCharacterId';
+
+function getProtagonistCharacterId(){
+  return localStorage.getItem(PROTAGONIST_CHARACTER_KEY) || '';
+}
+function setProtagonistCharacterId(id){
+  if(id){
+    localStorage.setItem(PROTAGONIST_CHARACTER_KEY, id);
+  } else {
+    localStorage.removeItem(PROTAGONIST_CHARACTER_KEY);
+  }
+}
+function loadCharacterIntoForm(item){
+  existingCharacterName.value = item.name || '';
+  existingCharacterNotes.value = item.notes || '';
+  const file = dataUrlToFile(item.imageDataUrl, (item.name || 'character') + '.png');
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  existingCharSheet.files = dt.files;
+  updateCharSheetPreview();
+  activeAutoSavedCharacterId = item.id; // 以後の編集はこのキャラクターを上書きする
+}
+
 function renderCharacterLibrary(){
   const list = loadCharacterLibrary();
+  const protagonistId = getProtagonistCharacterId();
   characterLibraryList.innerHTML = '';
   characterLibraryEmptyHint.style.display = list.length ? 'none' : 'block';
 
   list.forEach(item => {
+    const isProtagonist = item.id === protagonistId;
     const row = document.createElement('div');
     row.className = 'row';
-    row.style.cssText = 'gap:8px;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:6px;';
+    row.style.cssText = `gap:10px;background:#0a1220;border:1px solid ${isProtagonist ? 'var(--accent2)' : 'var(--border)'};border-radius:8px;padding:8px;`;
+
+    // 主人公チェック(1体だけ選べる)
+    const protagonistWrap = document.createElement('label');
+    protagonistWrap.title = '主人公にする';
+    protagonistWrap.style.cssText = 'display:flex;align-items:center;cursor:pointer;flex-shrink:0;';
+    const protagonistCheckbox = document.createElement('input');
+    protagonistCheckbox.type = 'checkbox';
+    protagonistCheckbox.checked = isProtagonist;
+    protagonistCheckbox.style.cssText = 'width:18px;height:18px;cursor:pointer;';
+    protagonistCheckbox.addEventListener('change', () => {
+      if(protagonistCheckbox.checked){
+        setProtagonistCharacterId(item.id);
+        loadCharacterIntoForm(item); // 主人公にした時点でそのキャラを呼び出す
+        characterSaveStatus.textContent = `✓ 「${item.name || '無題のキャラクター'}」を主人公にしました`;
+        setTimeout(() => { characterSaveStatus.textContent = ''; }, 2500);
+      } else {
+        setProtagonistCharacterId('');
+      }
+      renderCharacterLibrary();
+    });
+    protagonistWrap.appendChild(protagonistCheckbox);
+
+    // 画像はボタンの外に単体で置く(ドラッグしてデスクトップに保存できるようにするため)
+    const img = document.createElement('img');
+    img.src = item.imageDataUrl;
+    img.draggable = true;
+    img.title = 'ドラッグするとデスクトップなどに保存できます';
+    img.style.cssText = 'width:64px;height:114px;object-fit:cover;border-radius:6px;flex-shrink:0;border:1px solid var(--border);cursor:grab;';
 
     const loadBtn = document.createElement('button');
     loadBtn.type = 'button';
-    loadBtn.style.cssText = 'flex:1;display:flex;align-items:center;gap:8px;background:transparent;border:none;color:var(--text,#fff);cursor:pointer;text-align:left;padding:0;';
-    loadBtn.innerHTML = `<img src="${item.imageDataUrl}" style="width:36px;height:64px;object-fit:cover;border-radius:4px;flex-shrink:0;"><span style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.name || '無題のキャラクター'}</span>`;
+    loadBtn.style.cssText = 'flex:1;display:flex;flex-direction:column;justify-content:center;gap:2px;background:transparent;border:none;color:var(--text,#fff);cursor:pointer;text-align:left;padding:0;min-width:0;';
+    loadBtn.innerHTML = `<div style="font-size:14px;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.name || '無題のキャラクター'}${isProtagonist ? ' 👑' : ''}</div>
+      <div style="font-size:11px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.fileName || ''}</div>`;
     loadBtn.addEventListener('click', () => {
-      existingCharacterName.value = item.name || '';
-      existingCharacterNotes.value = item.notes || '';
-      const file = dataUrlToFile(item.imageDataUrl, (item.name || 'character') + '.png');
-      const dt = new DataTransfer();
-      dt.items.add(file);
-      existingCharSheet.files = dt.files;
-      updateCharSheetPreview();
-      activeAutoSavedCharacterId = item.id; // 以後の編集はこのキャラクターを上書きする
+      loadCharacterIntoForm(item);
       characterSaveStatus.textContent = `✓ 「${item.name || '無題のキャラクター'}」を呼び出しました`;
       setTimeout(() => { characterSaveStatus.textContent = ''; }, 2500);
     });
@@ -2541,9 +2590,12 @@ function renderCharacterLibrary(){
       if(!confirm(`「${item.name || '無題のキャラクター'}」を削除しますか?`)) return;
       saveCharacterLibrary(loadCharacterLibrary().filter(c => c.id !== item.id));
       if(activeAutoSavedCharacterId === item.id) activeAutoSavedCharacterId = null;
+      if(getProtagonistCharacterId() === item.id) setProtagonistCharacterId('');
       renderCharacterLibrary();
     });
 
+    row.appendChild(protagonistWrap);
+    row.appendChild(img);
     row.appendChild(loadBtn);
     row.appendChild(deleteBtn);
     characterLibraryList.appendChild(row);
@@ -2552,13 +2604,43 @@ function renderCharacterLibrary(){
 renderCharacterLibrary();
 
 // 画像を新しく選んだ時点で自動保存(このタイミングで新しいキャラクターとして登録)
+// 複数枚まとめて選んだ場合は、1枚ずつ別々のキャラクターとしてまとめて登録する。
+async function batchSaveCharacterFiles(files){
+  if(files.length === 0) return;
+  if(files.length === 1){
+    // 1枚だけなら、今まで通り名前・補足欄の入力内容を使って保存する
+    const dt = new DataTransfer();
+    dt.items.add(files[0]);
+    existingCharSheet.files = dt.files;
+    updateCharSheetPreview();
+    activeAutoSavedCharacterId = null;
+    await autoSaveCharacter();
+    return;
+  }
+  // 2枚以上まとめて選んだ場合は、名前・補足欄には触れず、ファイル名をそのまま
+  // キャラクター名にして一気に登録する。
+  const list = loadCharacterLibrary();
+  for(const file of files){
+    try{
+      const imageDataUrl = await fileToDataUrl(file);
+      const name = file.name.replace(/\.[^.]+$/, '') || '無題のキャラクター';
+      list.unshift({ id: 'char_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name, notes: '', imageDataUrl, fileName: file.name, savedAt: Date.now() });
+    }catch(e){
+      console.warn('キャラクターの登録に失敗しました', file.name, e);
+    }
+  }
+  saveCharacterLibrary(list);
+  renderCharacterLibrary();
+  characterSaveStatus.textContent = `✓ ${files.length}枚のキャラクターを登録しました`;
+  setTimeout(() => { characterSaveStatus.textContent = ''; }, 3000);
+}
+
 existingCharSheet.addEventListener('change', () => {
-  activeAutoSavedCharacterId = null; // 新しい画像=別のキャラクター扱いにする
-  autoSaveCharacter();
+  batchSaveCharacterFiles(Array.from(existingCharSheet.files));
 });
-charSheetDropZone.addEventListener('drop', () => {
-  activeAutoSavedCharacterId = null;
-  setTimeout(autoSaveCharacter, 50); // updateCharSheetPreview側のfiles反映を待つ
+charSheetDropZone.addEventListener('drop', (e) => {
+  const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/'));
+  batchSaveCharacterFiles(files);
 });
 // 名前・補足を後から直した時も、すでに保存済みのキャラクターに自動で反映する
 existingCharacterName.addEventListener('blur', autoSaveCharacter);
