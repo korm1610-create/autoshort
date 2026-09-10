@@ -2608,7 +2608,11 @@ renderCharacterLibrary();
 async function batchSaveCharacterFiles(files){
   if(files.length === 0) return;
   if(files.length === 1){
-    // 1枚だけなら、今まで通り名前・補足欄の入力内容を使って保存する
+    // 1枚だけ新しく選んだ場合は、別の新しいキャラクターとして扱う。
+    // 前に呼び出していたキャラクターの名前・補足が残っていると、それを引き継いで
+    // 上書き保存されてしまう(違うキャラなのに同じ名前になる)ため、ここで一旦クリアする。
+    existingCharacterName.value = '';
+    existingCharacterNotes.value = '';
     const dt = new DataTransfer();
     dt.items.add(files[0]);
     existingCharSheet.files = dt.files;
