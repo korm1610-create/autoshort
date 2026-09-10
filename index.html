@@ -220,7 +220,12 @@
     <textarea id="script" placeholder="例:&#10;江戸時代、傘は超高級品だった&#10;庶民はほとんど油紙の番傘をレンタルしてた&#10;これが日本初のシェアリングエコノミー説!"></textarea>
     <div class="hint">1行ごとに1つの字幕として表示されます。文字数に応じて表示時間を自動調整します。</div>
 
-    <div id="scriptCategoryTabs" class="row" style="gap:4px;margin-top:12px;flex-wrap:wrap;"></div>
+    <div id="scriptCategoryTabs" class="row" style="gap:4px;margin-top:12px;flex-wrap:wrap;">
+      <div id="scriptSeasonWrapper" style="position:relative;">
+        <button type="button" id="scriptSeasonBtn" style="padding:5px 10px;border-radius:14px;border:1px solid var(--border);background:transparent;color:var(--sub);font-size:12px;cursor:pointer;">季節: すべて ▾</button>
+        <div id="scriptSeasonMenu" style="display:none;position:absolute;top:110%;left:0;z-index:20;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px;flex-direction:column;gap:4px;min-width:120px;box-shadow:0 4px 16px rgba(0,0,0,0.4);"></div>
+      </div>
+    </div>
     <div class="hint" id="scriptLibraryTotalCount" style="text-align:center;color:var(--accent2);"></div>
 
     <div id="savedScriptsList" style="margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:280px;overflow-y:auto;padding-right:4px;"></div>
@@ -246,6 +251,8 @@
       <div class="hint">カテゴリー</div>
       <div id="saveScriptCategoryChoices" class="row" style="gap:6px;flex-wrap:wrap;"></div>
       <div class="hint" id="saveScriptCategoryHint" style="color:var(--accent2);"></div>
+      <div class="hint">季節タグ(任意)</div>
+      <div id="saveScriptSeasonChoices" class="row" style="gap:6px;flex-wrap:wrap;"></div>
       <div class="row" style="gap:8px;margin-top:16px;">
         <button type="button" id="saveScriptCancelBtn" style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;">キャンセル</button>
         <button type="button" id="saveScriptConfirmBtn" style="flex:1;padding:9px;border-radius:8px;border:1px solid var(--accent2);background:var(--accent2);color:#0d1526;font-weight:bold;cursor:pointer;">保存</button>
@@ -1580,18 +1587,25 @@ const saveScriptBtn = document.getElementById('saveScriptBtn');
 const scriptSaveStatus = document.getElementById('scriptSaveStatus');
 const scriptUsedHint = document.getElementById('scriptUsedHint');
 const scriptCategoryTabs = document.getElementById('scriptCategoryTabs');
+const scriptSeasonBtn = document.getElementById('scriptSeasonBtn');
+const scriptSeasonMenu = document.getElementById('scriptSeasonMenu');
 const saveScriptModalOverlay = document.getElementById('saveScriptModalOverlay');
 const saveScriptNameInput = document.getElementById('saveScriptNameInput');
 const saveScriptCategoryChoices = document.getElementById('saveScriptCategoryChoices');
 const saveScriptCategoryHint = document.getElementById('saveScriptCategoryHint');
+const saveScriptSeasonChoices = document.getElementById('saveScriptSeasonChoices');
 const saveScriptCancelBtn = document.getElementById('saveScriptCancelBtn');
 const saveScriptConfirmBtn = document.getElementById('saveScriptConfirmBtn');
 const backupScriptsBtn = document.getElementById('backupScriptsBtn');
 const restoreScriptsBtn = document.getElementById('restoreScriptsBtn');
 const restoreScriptsInput = document.getElementById('restoreScriptsInput');
 
+const SEASON_TAGS = ['季節なし', '春', '夏', '秋', '冬'];
+const SEASON_FILTER_ALL = 'すべて';
 let currentCategoryFilter = SCRIPT_CATEGORIES[0];
+let currentSeasonFilter = SEASON_FILTER_ALL;
 let saveModalSelectedCategory = SCRIPT_CATEGORIES[0];
+let saveModalSelectedSeason = SEASON_TAGS[0];
 let loadedScriptId = null; // 現在テキストエリアに読み込まれている保存済み台本のID(書き出し完了時に自動削除する)
 
 function loadScriptLibrary(){
@@ -1628,10 +1642,13 @@ function categoryTabButtonStyle(active){
 }
 
 function renderCategoryTabs(){
-  scriptCategoryTabs.innerHTML = '';
+  // 季節ボタン(の入れ物)は残しつつ、カテゴリーボタンだけを作り直す
+  scriptCategoryTabs.querySelectorAll('.categoryTabBtn').forEach(el => el.remove());
+  const seasonWrapper = document.getElementById('scriptSeasonWrapper');
   SCRIPT_CATEGORIES.forEach(cat => {
     const btn = document.createElement('button');
     btn.type = 'button';
+    btn.className = 'categoryTabBtn';
     btn.textContent = cat;
     btn.style.cssText = categoryTabButtonStyle(cat === currentCategoryFilter);
     btn.addEventListener('click', () => {
@@ -1639,10 +1656,38 @@ function renderCategoryTabs(){
       renderCategoryTabs();
       renderSavedScriptsSelect();
     });
-    scriptCategoryTabs.appendChild(btn);
+    scriptCategoryTabs.insertBefore(btn, seasonWrapper);
   });
 }
 renderCategoryTabs();
+
+function renderSeasonTabs(){
+  scriptSeasonBtn.textContent = (currentSeasonFilter === SEASON_FILTER_ALL ? '季節: すべて' : `季節: ${currentSeasonFilter}`) + ' ▾';
+  scriptSeasonMenu.innerHTML = '';
+  [SEASON_FILTER_ALL, ...SEASON_TAGS].forEach(season => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.textContent = season === SEASON_FILTER_ALL ? '季節: すべて' : season;
+    item.style.cssText = categoryTabButtonStyle(season === currentSeasonFilter) + 'text-align:left;width:100%;';
+    item.addEventListener('click', () => {
+      currentSeasonFilter = season;
+      scriptSeasonMenu.style.display = 'none';
+      renderSeasonTabs();
+      renderSavedScriptsSelect();
+    });
+    scriptSeasonMenu.appendChild(item);
+  });
+}
+renderSeasonTabs();
+scriptSeasonBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  scriptSeasonMenu.style.display = scriptSeasonMenu.style.display === 'none' ? 'flex' : 'none';
+});
+document.addEventListener('click', (e) => {
+  if(!scriptSeasonMenu.contains(e.target) && e.target !== scriptSeasonBtn){
+    scriptSeasonMenu.style.display = 'none';
+  }
+});
 
 function renderSaveModalCategoryChoices(){
   saveScriptCategoryChoices.innerHTML = '';
@@ -1660,16 +1705,35 @@ function renderSaveModalCategoryChoices(){
   });
 }
 
+function renderSaveModalSeasonChoices(){
+  saveScriptSeasonChoices.innerHTML = '';
+  SEASON_TAGS.forEach(season => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = season;
+    btn.style.cssText = categoryTabButtonStyle(season === saveModalSelectedSeason);
+    btn.addEventListener('click', () => {
+      saveModalSelectedSeason = season;
+      renderSaveModalSeasonChoices();
+    });
+    saveScriptSeasonChoices.appendChild(btn);
+  });
+}
+
 function renderSavedScriptsSelect(selectId){
   const list = loadScriptLibrary();
-  const items = list.filter(item => item.category === currentCategoryFilter);
+  const items = list.filter(item =>
+    item.category === currentCategoryFilter &&
+    (currentSeasonFilter === SEASON_FILTER_ALL || (item.season || '季節なし') === currentSeasonFilter)
+  );
 
   savedScriptsList.innerHTML = '';
   savedScriptsEmptyHint.style.display = items.length ? 'none' : 'block';
 
   const allCount = list.length;
+  const seasonLabel = currentSeasonFilter === SEASON_FILTER_ALL ? '' : `・季節「${currentSeasonFilter}」`;
   scriptLibraryTotalCount.textContent = allCount > 0
-    ? `保存済み: 全カテゴリー合計 ${allCount}件(このタブ「${currentCategoryFilter}」: ${items.length}件)`
+    ? `保存済み: 全カテゴリー合計 ${allCount}件(このタブ「${currentCategoryFilter}」${seasonLabel}: ${items.length}件)`
     : `保存済み: 全カテゴリー合計 0件`;
 
   items.forEach(item => {
@@ -1679,7 +1743,7 @@ function renderSavedScriptsSelect(selectId){
 
     const nameBtn = document.createElement('button');
     nameBtn.type = 'button';
-    nameBtn.textContent = item.name;
+    nameBtn.textContent = (item.season && item.season !== '季節なし' ? `[${item.season}] ` : '') + item.name;
     const isSelected = item.id === selectId;
     nameBtn.style.cssText = `flex:1;text-align:left;padding:8px 10px;border-radius:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;
       border:1px solid ${isSelected ? 'var(--accent2)' : 'var(--border)'};
@@ -1749,6 +1813,32 @@ function guessScriptCategory(text){
   return { category: best, matched: bestScore > 0 };
 }
 
+const SEASON_KEYWORDS = {
+  '春': ['春', '花見', '桜', '入学', '梅', 'うぐいす', '節句', 'ひな祭り', '花冷え'],
+  '夏': ['夏', '暑さ', '祭り', '花火', '打ち水', '土用', '夕涼み', '蚊', '団扇', '扇子', '盆', '海', '汗'],
+  '秋': ['秋', '紅葉', '月見', '収穫', '涼しく', '衣替え', '台風', '虫の声'],
+  '冬': ['冬', '雪', '寒さ', '正月', '餅', '炬燵', 'こたつ', '火鉢', '大晦日', '年越し', '節分']
+};
+function guessScriptSeason(text){
+  const scores = {};
+  SEASON_TAGS.forEach(s => { scores[s] = 0; });
+  SEASON_TAGS.forEach(s => {
+    (SEASON_KEYWORDS[s] || []).forEach(kw => {
+      const matches = text.split(kw).length - 1;
+      scores[s] += matches;
+    });
+  });
+  let best = '季節なし';
+  let bestScore = 0;
+  SEASON_TAGS.forEach(s => {
+    if(scores[s] > bestScore){
+      best = s;
+      bestScore = scores[s];
+    }
+  });
+  return { season: best, matched: bestScore > 0 };
+}
+
 saveScriptBtn.addEventListener('click', () => {
   const text = scriptEl.value.trim();
   if(!text){
@@ -1761,6 +1851,9 @@ saveScriptBtn.addEventListener('click', () => {
   const guess = guessScriptCategory(text);
   saveModalSelectedCategory = guess.category;
   renderSaveModalCategoryChoices();
+  const seasonGuess = guessScriptSeason(text);
+  saveModalSelectedSeason = seasonGuess.season;
+  renderSaveModalSeasonChoices();
   saveScriptCategoryHint.textContent = guess.matched
     ? `台本の内容から「${guess.category}」を自動で選びました。違っていたらタップして変更してください。`
     : '台本の内容からカテゴリーを判定できなかったので、選んでください。';
@@ -1778,7 +1871,7 @@ saveScriptConfirmBtn.addEventListener('click', () => {
   const name = saveScriptNameInput.value.trim() || '無題の台本';
   const list = loadScriptLibrary();
   const id = 'script_' + Date.now();
-  list.unshift({ id, name, category: saveModalSelectedCategory, text, savedAt: Date.now() });
+  list.unshift({ id, name, category: saveModalSelectedCategory, season: saveModalSelectedSeason, text, savedAt: Date.now() });
   saveScriptLibrary(list);
   currentCategoryFilter = saveModalSelectedCategory;
   renderCategoryTabs();
@@ -2612,7 +2705,6 @@ function loadMedia(file){
     return new Promise((resolve, reject) => {
       const v = document.createElement('video');
       v.muted = true;
-      v.loop = true;
       v.playsInline = true;
       v.preload = 'auto';
       // 画面上に一切存在しない(DOM外の)video要素だと、ブラウザによっては
@@ -2839,7 +2931,10 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha, renderMode){
       media._lastCurrentTime = currentTime;
     }
 
-    if(media.el.paused){
+    if(media.el.paused && !media.el.ended){
+      // ended(最後まで再生し終わった)の時は再スタートさせず、最後のコマで止めたままにする。
+      // (トリム範囲を指定している場合は、上のロジックで先にcurrentTimeを巻き戻しているので、
+      //  ここに来る時点でendedはfalseに戻っており、正常に再開できる)
       media.el.play().catch(()=>{});
     }
 
