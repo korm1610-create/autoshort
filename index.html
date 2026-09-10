@@ -424,6 +424,20 @@
 
   <button id="renderBtn">🎬 動画を書き出す</button>
   <div id="status"></div>
+  <button id="cancelRenderBtn" style="display:none;margin-top:8px;width:100%;padding:10px;border-radius:10px;border:1px solid #ff5a5a;background:transparent;color:#ff5a5a;font-weight:bold;cursor:pointer;">✕ 書き出しをキャンセル</button>
+
+  <div class="step">
+    <label>📝 タイトル・説明文を作る <span style="font-weight:normal;color:var(--sub);font-size:12px;">(書き出し中でも使えます)</span></label>
+    <button type="button" id="genTitleDescBtn" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--accent2);background:transparent;color:var(--accent2);font-weight:bold;cursor:pointer;">✨ 台本からタイトル・説明文を作る</button>
+
+    <div class="hint" style="margin-top:12px;">タイトル案(タップでコピー)</div>
+    <div id="titleCandidates" style="display:flex;flex-direction:column;gap:6px;"></div>
+
+    <div class="hint" style="margin-top:12px;">説明文</div>
+    <textarea id="genDescriptionText" style="min-height:100px;" placeholder="生成するとここに説明文(ハッシュタグ付き)が入ります。自由に編集できます。"></textarea>
+    <button type="button" id="copyDescriptionBtn" style="margin-top:6px;width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">📋 説明文をコピー</button>
+    <div class="hint" id="genTitleDescStatus" style="text-align:center;"></div>
+  </div>
 
   <div id="checkModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(5,9,18,0.75);z-index:100;align-items:center;justify-content:center;padding:16px;">
     <div id="checkModalPanel" style="background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent2);border-radius:12px;padding:16px;width:100%;max-height:88vh;overflow-y:auto;">
@@ -497,6 +511,12 @@
           <button type="button" id="checkModalConfirm" style="flex:1;padding:12px;border-radius:10px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0d1526;font-weight:bold;cursor:pointer;">この内容で書き出す</button>
         </div>
         <button type="button" id="renderHQBtn" style="margin-top:8px;width:100%;padding:12px;border-radius:10px;border:1px solid #39ff6a;background:transparent;color:#39ff6a;font-weight:bold;cursor:pointer;">🎬 高品質で書き出す(時間がかかります・毎回同じ滑らかさになります)</button>
+
+        <div class="hint" style="margin-top:14px;margin-bottom:4px;text-align:center;">Canvaなどで動画を合成したい場合は、こちらだけダウンロードすることもできます</div>
+        <div class="row" style="gap:8px;">
+          <button type="button" id="downloadNarrationBtn" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">⬇ ナレーション+BGM(音声)</button>
+          <button type="button" id="downloadSrtBtn" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">⬇ 字幕(SRT)</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1822,12 +1842,12 @@ function renderCategoryTabs(){
 renderCategoryTabs();
 
 function renderSeasonTabs(){
-  scriptSeasonBtn.textContent = (currentSeasonFilter === SEASON_FILTER_ALL ? '季節: すべて' : `季節: ${currentSeasonFilter}`) + ' ▾';
+  scriptSeasonBtn.textContent = (currentSeasonFilter === SEASON_FILTER_ALL ? '季節' : `季節: ${currentSeasonFilter}`) + ' ▾';
   scriptSeasonMenu.innerHTML = '';
   [SEASON_FILTER_ALL, ...SEASON_TAGS].forEach(season => {
     const item = document.createElement('button');
     item.type = 'button';
-    item.textContent = season === SEASON_FILTER_ALL ? '季節: すべて' : season;
+    item.textContent = season === SEASON_FILTER_ALL ? 'すべて' : season;
     item.style.cssText = categoryTabButtonStyle(season === currentSeasonFilter) + 'text-align:left;width:100%;';
     item.addEventListener('click', () => {
       currentSeasonFilter = season;
@@ -1998,6 +2018,81 @@ function guessScriptSeason(text){
   });
   return { season: best, matched: bestScore > 0 };
 }
+
+// ===== タイトル・説明文の自動生成(書き出し中でも使えるよう、動画処理とは完全に独立させている) =====
+const CATEGORY_HASHTAGS = {
+  '暮らし': ['#江戸時代の暮らし', '#江戸っ子'],
+  '仕事': ['#江戸時代の仕事', '#職人'],
+  'お金': ['#江戸時代のお金', '#お金の話'],
+  '美容': ['#江戸時代の美容', '#美容雑学'],
+  '食べ物': ['#江戸グルメ', '#食文化']
+};
+const genTitleDescBtn = document.getElementById('genTitleDescBtn');
+const titleCandidates = document.getElementById('titleCandidates');
+const genDescriptionText = document.getElementById('genDescriptionText');
+const copyDescriptionBtn = document.getElementById('copyDescriptionBtn');
+const genTitleDescStatus = document.getElementById('genTitleDescStatus');
+
+function buildTitleCandidates(lines, hookLine){
+  const clean = hookLine.replace(/[!?！？]+$/g, '').trim();
+  const candidates = [
+    hookLine,
+    `【江戸雑学】${clean}`,
+    `${clean}…実は江戸時代の話`
+  ];
+  return [...new Set(candidates)]; // 重複を除く
+}
+
+function buildDescription(lines, category){
+  const body = lines.join('。').replace(/。{2,}/g, '。') + (lines.length ? '。' : '');
+  const tags = ['#江戸時代', '#雑学', '#歴史', '#shorts', ...(CATEGORY_HASHTAGS[category] || [])];
+  return `${body}\n\n${tags.join(' ')}`;
+}
+
+genTitleDescBtn.addEventListener('click', () => {
+  const text = scriptEl.value.trim();
+  if(!text){
+    alert('先に台本を入力してください');
+    return;
+  }
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const hookLine = lines[0] || '無題';
+  const guess = guessScriptCategory(text);
+
+  titleCandidates.innerHTML = '';
+  buildTitleCandidates(lines, hookLine).forEach(title => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = title;
+    btn.style.cssText = 'text-align:left;width:100%;padding:9px 10px;border-radius:8px;border:1px solid var(--border);background:#0a1220;color:var(--text,#fff);cursor:pointer;font-size:13px;';
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(title).then(() => {
+        genTitleDescStatus.textContent = '✓ タイトルをコピーしました: ' + title;
+        setTimeout(() => { genTitleDescStatus.textContent = ''; }, 2500);
+      }).catch(() => {
+        alert('コピーに失敗しました。手動で選択してコピーしてください。');
+      });
+    });
+    titleCandidates.appendChild(btn);
+  });
+
+  genDescriptionText.value = buildDescription(lines, guess.category);
+  genTitleDescStatus.textContent = '✓ 生成しました。タイトル案をタップするとコピーできます。';
+  setTimeout(() => { genTitleDescStatus.textContent = ''; }, 3000);
+});
+
+copyDescriptionBtn.addEventListener('click', () => {
+  if(!genDescriptionText.value.trim()){
+    alert('先に生成してください');
+    return;
+  }
+  navigator.clipboard.writeText(genDescriptionText.value).then(() => {
+    copyDescriptionBtn.textContent = '✓ コピーしました';
+    setTimeout(() => { copyDescriptionBtn.textContent = '📋 説明文をコピー'; }, 1500);
+  }).catch(() => {
+    alert('コピーに失敗しました。手動で選択してコピーしてください。');
+  });
+});
 
 saveScriptBtn.addEventListener('click', () => {
   const text = scriptEl.value.trim();
@@ -3974,13 +4069,102 @@ function buildFinalTimelines(){
   return { totalDuration, subtitleTimeline, imageTimeline };
 }
 
+// ===== ナレーション音声・字幕(SRT)だけをダウンロード(Canvaなどで動画合成したい場合向け) =====
+function srtTimeFormat(totalSeconds){
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.floor(totalSeconds % 60);
+  const ms = Math.round((totalSeconds - Math.floor(totalSeconds)) * 1000);
+  const pad = (n, len) => String(n).padStart(len, '0');
+  return `${pad(h,2)}:${pad(m,2)}:${pad(s,2)},${pad(ms,3)}`;
+}
+function buildSrtText(subtitleTimeline){
+  return subtitleTimeline.map((seg, i) => {
+    return `${i+1}\n${srtTimeFormat(seg.start)} --> ${srtTimeFormat(seg.end)}\n${seg.text}\n`;
+  }).join('\n');
+}
+function triggerDownload(url, filename){
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+const downloadNarrationBtn = document.getElementById('downloadNarrationBtn');
+const downloadSrtBtn = document.getElementById('downloadSrtBtn');
+
+downloadNarrationBtn.addEventListener('click', async () => {
+  if(!checkNarrationBuffer){
+    alert('ナレーション音声がまだ準備できていません');
+    return;
+  }
+  downloadNarrationBtn.disabled = true;
+  const originalLabel = downloadNarrationBtn.textContent;
+  downloadNarrationBtn.textContent = 'ミックス中...';
+  try{
+    const totalDuration = checkNarrationBuffer.duration;
+    const sampleRate = 44100;
+    const offlineCtx = new OfflineAudioContext(2, Math.ceil(totalDuration * sampleRate), sampleRate);
+    const narrSrc = offlineCtx.createBufferSource();
+    narrSrc.buffer = checkNarrationBuffer;
+    narrSrc.connect(offlineCtx.destination);
+    narrSrc.start(0);
+    if(checkBgmBuffer){
+      const bgmSrc = offlineCtx.createBufferSource();
+      bgmSrc.buffer = checkBgmBuffer;
+      bgmSrc.loop = true;
+      const bgmGain = offlineCtx.createGain();
+      bgmGain.gain.value = parseFloat(bgmVolume.value);
+      bgmSrc.connect(bgmGain).connect(offlineCtx.destination);
+      bgmSrc.start(0);
+    }
+    const mixedBuffer = await offlineCtx.startRendering();
+    const wavBytes = audioBufferToWav(mixedBuffer);
+    const blob = new Blob([wavBytes], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, 'narration_bgm.wav');
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }catch(e){
+    alert('ダウンロードに失敗しました: ' + e.message);
+  }finally{
+    downloadNarrationBtn.disabled = false;
+    downloadNarrationBtn.textContent = originalLabel;
+  }
+});
+
+downloadSrtBtn.addEventListener('click', () => {
+  if(!checkNarrationBuffer || !subtitleRows || subtitleRows.length === 0){
+    alert('字幕がまだ準備できていません');
+    return;
+  }
+  const { subtitleTimeline } = buildFinalTimelines();
+  const srtText = buildSrtText(subtitleTimeline);
+  const blob = new Blob([srtText], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, 'subtitles.srt');
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+});
+
 const renderHQBtn = document.getElementById('renderHQBtn');
+const cancelRenderBtn = document.getElementById('cancelRenderBtn');
+let renderCancelled = false;
+
+cancelRenderBtn.addEventListener('click', () => {
+  renderCancelled = true;
+  setStatus('キャンセル中...');
+  cancelRenderBtn.disabled = true;
+});
 
 checkModalConfirm.addEventListener('click', () => {
   checkPreviewAudio.pause();
   scriptEl.value = checkScriptText.value;
   checkModalOverlay.style.display = 'none';
   canvasWrap.appendChild(canvas);
+  renderCancelled = false;
+  cancelRenderBtn.disabled = false;
+  cancelRenderBtn.style.display = 'block';
 
   const { totalDuration, subtitleTimeline, imageTimeline } = buildFinalTimelines();
 
@@ -4001,6 +4185,9 @@ renderHQBtn.addEventListener('click', () => {
   canvasWrap.appendChild(canvas);
   renderBtn.disabled = true;
   renderHQBtn.disabled = true;
+  renderCancelled = false;
+  cancelRenderBtn.disabled = false;
+  cancelRenderBtn.style.display = 'block';
 
   const { totalDuration, subtitleTimeline, imageTimeline } = buildFinalTimelines();
 
@@ -4170,6 +4357,14 @@ function seekVideoTo(media, targetTime){
       })
     );
 
+    if(renderCancelled){
+      setStatus('キャンセルしました');
+      renderBtn.disabled = false;
+      renderHQBtn.disabled = false;
+      cancelRenderBtn.style.display = 'none';
+      return;
+    }
+
 // ② 1フレームずつ、確実に正しい内容を描画してPNGとして書き出す。
 // トリム指定のない動画(=一番よくあるケース)は、事前に位置合わせした状態から
 // ただ再生させるだけで、書き出し中は一切シークしない。動画をそのまま使いたい、
@@ -4180,6 +4375,17 @@ const FPS = 24;
 const totalFrames = Math.max(1, Math.ceil(totalDuration * FPS));
 let activeVideoSegIndex = -1;
 for(let f = 0; f < totalFrames; f++){
+  if(renderCancelled){
+    setStatus('キャンセルしました');
+    for(let g = 0; g < f; g++){
+      try{ await ffmpeg.deleteFile(`frame${String(g).padStart(5,'0')}.png`); }catch(e){}
+    }
+    try{ await ffmpeg.deleteFile('mixed.wav'); }catch(e){}
+    renderBtn.disabled = false;
+    renderHQBtn.disabled = false;
+    cancelRenderBtn.style.display = 'none';
+    return;
+  }
   const t = Math.min(f / FPS, totalDuration - 0.001);
   const segIndex = imageTimeline.findIndex(s => t >= s.start && t < s.end);
   const seg = segIndex >= 0 ? imageTimeline[segIndex] : imageTimeline[imageTimeline.length - 1];
@@ -4262,6 +4468,7 @@ for(let f = 0; f < totalFrames; f++){
     setStatus('完成! 🎉');
     renderBtn.disabled = false;
     renderHQBtn.disabled = false;
+    cancelRenderBtn.style.display = 'none';
 
     // 後片付け(メモリ解放)
     for(let f = 0; f < totalFrames; f++){
@@ -4272,6 +4479,7 @@ for(let f = 0; f < totalFrames; f++){
     setStatus('エラーが発生しました: ' + err.message);
     renderBtn.disabled = false;
     renderHQBtn.disabled = false;
+    cancelRenderBtn.style.display = 'none';
   }
 }
 
@@ -4309,6 +4517,13 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
         });
       })
     );
+
+    if(renderCancelled){
+      setStatus('キャンセルしました');
+      renderBtn.disabled = false;
+      cancelRenderBtn.style.display = 'none';
+      return;
+    }
 
     // 音声グラフ構築
     const dest = audioCtx.createMediaStreamDestination();
@@ -4375,6 +4590,14 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
 
     let rafId;
     function loop(){
+      if(renderCancelled){
+        cancelAnimationFrame(rafId);
+        setStatus('キャンセル中...');
+        try{ recorder.stop(); }catch(e){}
+        if(bgmSource){ try{ bgmSource.stop(); }catch(e){} }
+        try{ narrationSource.stop(); }catch(e){}
+        return;
+      }
       const now = audioCtx.currentTime - startTime;
       if(now < 0){
         rafId = requestAnimationFrame(loop);
@@ -4394,12 +4617,21 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
       cancelAnimationFrame(rafId);
       // 音声の長さにできるだけ正確に合わせるため、余分な待ちはごく僅かに
       setTimeout(() => {
+        if(renderCancelled) return; // キャンセル時はloop()側で既にstop済み
         recorder.stop();
         if(bgmSource){ try{ bgmSource.stop(); }catch(e){} }
       }, 30);
     };
 
     await recordingDone;
+
+    if(renderCancelled){
+      setStatus('キャンセルしました');
+      renderBtn.disabled = false;
+      cancelRenderBtn.style.display = 'none';
+      return;
+    }
+
     setStatus('MP4に変換中...(少し時間がかかります)');
 
     // 録画結果(ブラウザによってはwebmになる)を、ffmpegで必ずMP4(H.264/AAC)に
@@ -4435,12 +4667,14 @@ async function startRender({ audioCtx, narrationBuffer, bgmBuffer, subtitleTimel
     resultWrap.style.display = 'block';
     setStatus('完成! 🎉');
     renderBtn.disabled = false;
+    cancelRenderBtn.style.display = 'none';
     await markLoadedScriptAsUsedIfNeeded();
 
   } catch(err){
     console.error(err);
     setStatus('エラーが発生しました: ' + err.message);
     renderBtn.disabled = false;
+    cancelRenderBtn.style.display = 'none';
   }
 }
 </script>
