@@ -421,6 +421,9 @@
     <input type="range" id="bgmVolume" min="0" max="1" step="0.01" value="0.16">
   </div>
 
+  <div class="hint" style="margin-top:0;margin-bottom:4px;">書き出す解像度(数値が小さいほど、書き出し中のガタつきが起きにくくなります)</div>
+  <div id="resolutionChoices" class="row" style="gap:6px;margin-bottom:10px;"></div>
+
   <div id="canvasWrap">
     <canvas id="canvas" width="720" height="1280"></canvas>
   </div>
@@ -2041,8 +2044,8 @@ function buildTitleCandidates(lines, hookLine){
   const clean = hookLine.replace(/[!?！？]+$/g, '').trim();
   const candidates = [
     hookLine,
-    `【江戸雑学】${clean}`,
-    `${clean}…実は江戸時代の話`
+    `【江戸雑学】${hookLine}`,
+    `${clean}?!`
   ];
   return [...new Set(candidates)]; // 重複を除く
 }
@@ -2053,18 +2056,43 @@ function buildDescription(lines, category){
   return `${body}\n\n${tags.join(' ')}`;
 }
 
-genTitleDescBtn.addEventListener('click', () => {
+genTitleDescBtn.addEventListener('click', async () => {
   const text = scriptEl.value.trim();
   if(!text){
     alert('先に台本を入力してください');
     return;
   }
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  const hookLine = lines[0] || '無題';
+  // 台本の書き出し(フック部分)は複数行に分かれていることが多いので、
+  // 「!?」「?」「!」で終わる行までをひとまとめにして、1つの完結したフック文にする。
+  const hookParts = [];
+  for(const line of lines){
+    hookParts.push(line);
+    if(/[!?！？]$/.test(line)) break;
+  }
+  // タイトルは話し言葉の「って」より「は」の方が引き締まって見えるため、
+  // 最初の行末が「って」の場合だけ、タイトル用に「は」へ置き換える
+  if(hookParts.length > 0 && hookParts[0].endsWith('って')){
+    hookParts[0] = hookParts[0].slice(0, -2) + 'は';
+  }
+  const hookLine = hookParts.join('') || lines[0] || '無題';
   const guess = guessScriptCategory(text);
 
+  // 保存した台本から読み込んでいる場合は、その台本名(えりなさんが自分で付けた
+  // 短くて分かりやすいタイトル)を一番手前の候補として使う
+  let savedTitle = null;
+  if(loadedScriptId){
+    const savedItem = loadScriptLibrary().find(s => s.id === loadedScriptId);
+    if(savedItem && savedItem.name){
+      savedTitle = /[!?！？]$/.test(savedItem.name) ? savedItem.name : savedItem.name + '!?';
+    }
+  }
+
   titleCandidates.innerHTML = '';
-  buildTitleCandidates(lines, hookLine).forEach(title => {
+  const titleList = savedTitle
+    ? [savedTitle, ...buildTitleCandidates(lines, hookLine)]
+    : buildTitleCandidates(lines, hookLine);
+  [...new Set(titleList)].forEach(title => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = title;
@@ -2250,6 +2278,34 @@ const checkCanvasWrap = document.getElementById('checkCanvasWrap');
 const ctx = canvas.getContext('2d');
 const resultWrap = document.getElementById('resultWrap');
 const genMetaBtn = document.getElementById('genMetaBtn');
+
+// ===== 解像度選択(数値が小さいほど、実録画中にコマが飛びにくくなる) =====
+const RESOLUTION_OPTIONS = [
+  { label: '高画質(720×1280)', w: 720, h: 1280 },
+  { label: '標準(540×960)', w: 540, h: 960 },
+  { label: '軽量(360×640)', w: 360, h: 640 }
+];
+const resolutionChoices = document.getElementById('resolutionChoices');
+function renderResolutionChoices(){
+  resolutionChoices.innerHTML = '';
+  RESOLUTION_OPTIONS.forEach(opt => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = opt.label;
+    const active = canvas.width === opt.w;
+    btn.style.cssText = `flex:1;padding:7px 4px;border-radius:10px;font-size:12px;cursor:pointer;
+      border:1px solid ${active ? 'var(--accent2)' : 'var(--border)'};
+      background:${active ? 'var(--accent2)' : 'transparent'};
+      color:${active ? '#0d1526' : 'var(--sub)'};font-weight:${active ? 'bold' : 'normal'};`;
+    btn.addEventListener('click', () => {
+      canvas.width = opt.w;
+      canvas.height = opt.h;
+      renderResolutionChoices();
+    });
+    resolutionChoices.appendChild(btn);
+  });
+}
+renderResolutionChoices();
 const metaOutput = document.getElementById('metaOutput');
 
 const YT_BASE_TAGS = ['江戸時代','日本の歴史','豆知識','雑学','江戸雑学','Edo period','Japanese history','Japan trivia','Shorts'];
@@ -2981,13 +3037,13 @@ const videoPromptList = document.getElementById('videoPromptList');
 const VIDEO_MOTION_HOOK = "Quick, punchy zoom-in toward the character's face as their eyes go wide and their mouth opens in shock — sell this as the surprising hook that grabs the viewer's attention in the first second.";
 
 const VIDEO_MOTION_WORK = [
-  "Slow, gentle pan across the scene to reveal the setting, giving a sense of establishing where and when this is happening",
-  "Slow zoom-in on the hands or the key object in the scene, with subtle parallax, to draw attention to the detail being described",
-  "Soft zoom-out combined with a slight camera drift, as if stepping back to take in the character's full reaction",
-  "Slow dramatic push-in on the character's face, with subtle blinking/breathing motion, to emphasize the emotional beat of this moment",
-  "Gentle handheld-style sway with slight parallax on the background elements, keeping the character as the steady focal point",
-  "Slow orbit-like drift to one side, revealing depth in the scene while the character reacts",
-  "Soft ambient motion only (drifting dust, steam, falling leaves, or fabric/hair movement in the wind) with the camera holding mostly still, to let the moment breathe before the next scene"
+  "Slow pan across the scene to reveal the setting, while the character visibly breathes, blinks naturally, and shifts their weight slightly — the character must be clearly alive and moving, not a still photo.",
+  "Slow zoom-in on the hands or the key object, while the character's fingers visibly move (picking up, turning, or adjusting the object) — the hand motion must be clearly visible throughout the clip.",
+  "Soft zoom-out while the character reacts with a visible head tilt or nod and natural blinking — make sure the face and head noticeably move, not just the camera.",
+  "Slow push-in on the character's face, with clearly visible blinking, subtle eyebrow movement, and gentle breathing motion in the shoulders — the face must show continuous small movement.",
+  "Gentle handheld-style sway while the character shifts their posture or gestures with one hand — both the character and background should show visible motion.",
+  "Slow drift to one side while the character turns their head slightly to follow the camera, with natural blinking — the character's head movement must be clearly visible.",
+  "Camera holds mostly still, but the character must clearly move: a visible nod, a slow smile forming, a hand raising, or a slight lean forward — do not leave the character static like a photo; combine this with ambient motion (drifting dust, steam, falling leaves, or fabric/hair movement in the wind) for atmosphere."
 ];
 
 genVideoPromptBtn.addEventListener('click', () => {
@@ -3009,7 +3065,9 @@ genVideoPromptBtn.addEventListener('click', () => {
 
 [CRITICAL RULE — MUST FOLLOW]: Do NOT add any other people, background characters, crowds, extras, or passersby that are not already present in the uploaded image. Only the character(s) already shown in the image may appear — no new people should be introduced during the animation.
 
-Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Reminder: no text, no speech bubbles, no captions, no watermark, no logos — the video must stay completely text-free, and no new people should appear beyond what is already in the image.`;
+[CRITICAL RULE — MUST FOLLOW]: The character must show clearly visible motion for the entire duration of the clip — blinking, breathing, a small gesture, a head tilt, or similar. Do NOT let the character sit frozen like a still photograph at any point; if the scene is calm, keep the motion small but it must still be continuously visible.
+
+Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Reminder: no text, no speech bubbles, no captions, no watermark, no logos — the video must stay completely text-free, no new people should appear beyond what is already in the image, and the character must keep showing small continuous motion throughout, never freezing like a still image.`;
 
     const card = document.createElement('div');
     card.style.cssText = 'background:#0a1220;border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;';
@@ -3541,14 +3599,17 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha, renderMode){
   ctx.globalAlpha = prevAlpha;
 }
 
-const SUBTITLE_FONT_SIZE = 58;
-const SUBTITLE_LINE_HEIGHT = 74;
+const SUBTITLE_FONT_SIZE_BASE = 58;  // canvas幅720pxを基準にした値
+const SUBTITLE_LINE_HEIGHT_BASE = 74;
 
 // 字幕1つ分のレイアウト(何行に折り返され、それぞれどこに描かれるか)を計算する。
 // drawFrame(canvas描画)と、行ごとの編集オーバーレイの位置決めの両方で共通利用する。
 function computeSubtitleLayout(sub, W, H, ctx){
-  ctx.font = `bold ${SUBTITLE_FONT_SIZE}px "Hiragino Kaku Gothic ProN","Hiragino Sans","Meiryo",sans-serif`;
-  const letterSpacing = sub.letterSpacing || 0;
+  const scale = W / 720; // 解像度を変えても字幕の見た目の比率が変わらないようにする
+  const fontSize = Math.round(SUBTITLE_FONT_SIZE_BASE * scale);
+  const lineHeight = SUBTITLE_LINE_HEIGHT_BASE * scale;
+  ctx.font = `bold ${fontSize}px "Hiragino Kaku Gothic ProN","Hiragino Sans","Meiryo",sans-serif`;
+  const letterSpacing = (sub.letterSpacing || 0) * scale;
   const maxWidth = W * (sub.widthRatio || 0.86);
   const manualLines = sub.text.split('\n');
   const allLines = [];
@@ -3557,11 +3618,11 @@ function computeSubtitleLayout(sub, W, H, ctx){
     wrapped.forEach(text => allLines.push({ text, manualIndex }));
   });
   const centerY = H * 0.58;
-  const startY = centerY - (allLines.length - 1) * SUBTITLE_LINE_HEIGHT / 2;
+  const startY = centerY - (allLines.length - 1) * lineHeight / 2;
   return allLines.map((l, i) => ({
     text: l.text,
     manualIndex: l.manualIndex,
-    y: startY + i * SUBTITLE_LINE_HEIGHT,
+    y: startY + i * lineHeight,
     width: measureLineWidthWithSpacing(ctx, l.text, letterSpacing)
   }));
 }
@@ -3570,9 +3631,10 @@ function computeSubtitleLayout(sub, W, H, ctx){
 function drawSubtitle(ctx, sub, W, H){
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const letterSpacing = sub.letterSpacing || 0;
+  const scale = W / 720;
+  const letterSpacing = (sub.letterSpacing || 0) * scale;
   const layout = computeSubtitleLayout(sub, W, H, ctx);
-  ctx.lineWidth = 13;
+  ctx.lineWidth = 13 * scale;
   ctx.lineJoin = 'round';
   ctx.strokeStyle = '#000000';
   ctx.fillStyle = '#ffffff';
@@ -4136,9 +4198,9 @@ function rebuildLineOverlays(){
     const topPercent = (lineInfo.y / H) * 100;
     const boxWidthNative = lineInfo.width + 60; // クリックしやすいよう少し余裕を持たせる
     const widthPercent = (boxWidthNative / W) * 100;
-    const heightPercent = (SUBTITLE_LINE_HEIGHT * 0.85 / H) * 100;
+    const heightPercent = (SUBTITLE_LINE_HEIGHT_BASE * (W/720) * 0.85 / H) * 100;
     const displayScale = getCanvasDisplayScale();
-    input.style.cssText = `position:absolute;top:${topPercent}%;left:50%;transform:translate(-50%,-50%);width:${widthPercent}%;height:${heightPercent}%;background:transparent;color:transparent;caret-color:#ff3b30;border:2px solid #ff3b30;border-radius:4px;text-align:center;font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;font-weight:bold;font-size:${SUBTITLE_FONT_SIZE * displayScale}px;letter-spacing:${(row.letterSpacing||0) * displayScale}px;padding:0;box-sizing:border-box;z-index:5;pointer-events:auto;`;
+    input.style.cssText = `position:absolute;top:${topPercent}%;left:50%;transform:translate(-50%,-50%);width:${widthPercent}%;height:${heightPercent}%;background:transparent;color:transparent;caret-color:#ff3b30;border:2px solid #ff3b30;border-radius:4px;text-align:center;font-family:'Hiragino Kaku Gothic ProN','Hiragino Sans','Meiryo',sans-serif;font-weight:bold;font-size:${SUBTITLE_FONT_SIZE_BASE * (W/720) * displayScale}px;letter-spacing:${(row.letterSpacing||0) * (W/720) * displayScale}px;padding:0;box-sizing:border-box;z-index:5;pointer-events:auto;`;
 
     input.addEventListener('focus', () => {
       overlayActiveLineIndex = lineIdx;
@@ -4314,9 +4376,34 @@ renderBtn.addEventListener('click', async () => {
     const totalDuration = narrationBuffer.duration;
     checkScriptText.value = scriptEl.value;
     const lines = scriptEl.value.split('\n');
+
+    // 前回この画面で調整した内容(字幕タイミング・トリム設定など)が、台本や素材の
+    // 構成(行数・画像枚数)が変わっていなければそのまま残るようにする。
+    // これにより、書き出しをやり直すたびに調整が消えてしまう問題を防ぐ。
     const defaultSubTimeline = buildSubtitleTimeline(lines, totalDuration);
-    subtitleRows = defaultSubTimeline.map(s => ({ text: s.text, duration: s.end - s.start, widthRatio: DEFAULT_SUBTITLE_WIDTH_RATIO, letterSpacing: 0 }));
-    imageRows = images.map(() => ({ duration: totalDuration / images.length, trimStart: 0, trimLength: null, playbackRate: 1 }));
+    const freshSubtitleRows = defaultSubTimeline.map(s => ({ text: s.text, duration: s.end - s.start, widthRatio: DEFAULT_SUBTITLE_WIDTH_RATIO, letterSpacing: 0 }));
+    if(subtitleRows.length === freshSubtitleRows.length && subtitleRows.every((r, i) => r.text === freshSubtitleRows[i].text)){
+      // 内容(行数・文言)が前回と同じなら、タイミングなどの調整をそのまま引き継ぐ
+    } else {
+      subtitleRows = freshSubtitleRows;
+    }
+
+    const freshImageRows = images.map(() => ({ duration: totalDuration / images.length, trimStart: 0, trimLength: null, playbackRate: 1 }));
+    if(imageRows.length !== freshImageRows.length){
+      imageRows = freshImageRows;
+    }
+    // 台本の長さ(totalDuration)が前回と変わっている場合は、各行・各素材の
+    // 表示時間の合計をそれに合わせて比率のまま伸縮させる
+    const prevSubTotal = subtitleRows.reduce((sum, r) => sum + r.duration, 0);
+    if(prevSubTotal > 0 && Math.abs(prevSubTotal - totalDuration) > 0.05){
+      const ratio = totalDuration / prevSubTotal;
+      subtitleRows = subtitleRows.map(r => ({ ...r, duration: r.duration * ratio }));
+    }
+    const prevImgTotal = imageRows.reduce((sum, r) => sum + r.duration, 0);
+    if(prevImgTotal > 0 && Math.abs(prevImgTotal - totalDuration) > 0.05){
+      const ratio = totalDuration / prevImgTotal;
+      imageRows = imageRows.map(r => ({ ...r, duration: r.duration * ratio }));
+    }
 
     renderSubtitleRows();
     renderImageRows();
@@ -4393,7 +4480,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Meiryo,${SUBTITLE_FONT_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,5,20,20,20,1
+Style: Default,Meiryo,${Math.round(SUBTITLE_FONT_SIZE_BASE * (W/720))},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,5,20,20,20,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
