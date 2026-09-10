@@ -2442,23 +2442,82 @@ existingCharSheet.addEventListener('change', updateCharSheetPreview);
 setupDropZone(charSheetDropZone, existingCharSheet, 'image/', updateCharSheetPreview);
 
 // ===== キャラクターライブラリ(一度作ったキャラクターシートをブラウザ内に保存して、次回から呼び出せるようにする) =====
-const CHARACTER_LIBRARY_KEY = 'edoShortsCharacterLibrary';
+// 画像データを含むため、容量制限の小さいlocalStorageではなくIndexedDBに保存する
+// (localStorageはブラウザ全体で5〜10MB程度しかなく、キャラクターシート画像を2〜3枚
+//  保存しただけで上限に達し、それ以降こっそり保存に失敗する不具合があったため)。
+const CHAR_DB_NAME = 'edoShortsCharacterDB';
+const CHAR_STORE_NAME = 'characters';
 const characterLibraryList = document.getElementById('characterLibraryList');
 const characterLibraryEmptyHint = document.getElementById('characterLibraryEmptyHint');
 const characterLibraryCount = document.getElementById('characterLibraryCount');
 const saveCharacterBtn = document.getElementById('saveCharacterBtn');
 const characterSaveStatus = document.getElementById('characterSaveStatus');
 
-function loadCharacterLibrary(){
+let charDbPromise = null;
+let charLibraryMigrated = false;
+async function migrateOldCharacterLibraryIfNeeded(){
+  if(charLibraryMigrated) return;
+  charLibraryMigrated = true;
   try{
-    const list = JSON.parse(localStorage.getItem(CHARACTER_LIBRARY_KEY) || '[]');
-    return Array.isArray(list) ? list : [];
+    const raw = localStorage.getItem('edoShortsCharacterLibrary');
+    if(!raw) return;
+    const oldList = JSON.parse(raw);
+    if(!Array.isArray(oldList) || oldList.length === 0){
+      localStorage.removeItem('edoShortsCharacterLibrary');
+      return;
+    }
+    const currentList = await loadCharacterLibrary();
+    const existingIds = new Set(currentList.map(c => c.id));
+    const merged = currentList.concat(oldList.filter(c => c && c.id && !existingIds.has(c.id)));
+    await saveCharacterLibrary(merged);
+    localStorage.removeItem('edoShortsCharacterLibrary'); // 移行できたので古い保存先は空にする(容量を圧迫しないように)
   }catch(e){
+    console.warn('古いキャラクターデータの移行に失敗しました', e);
+  }
+}
+function openCharDb(){
+  if(charDbPromise) return charDbPromise;
+  charDbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(CHAR_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if(!db.objectStoreNames.contains(CHAR_STORE_NAME)){
+        db.createObjectStore(CHAR_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return charDbPromise;
+}
+async function loadCharacterLibrary(){
+  try{
+    const db = await openCharDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(CHAR_STORE_NAME, 'readonly');
+      const store = tx.objectStore(CHAR_STORE_NAME);
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const list = (req.result || []).slice().sort((a, b) => (b.savedAt||0) - (a.savedAt||0));
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }catch(e){
+    console.warn('キャラクターライブラリの読み込みに失敗しました', e);
     return [];
   }
 }
-function saveCharacterLibrary(list){
-  localStorage.setItem(CHARACTER_LIBRARY_KEY, JSON.stringify(list));
+async function saveCharacterLibrary(list){
+  const db = await openCharDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(CHAR_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(CHAR_STORE_NAME);
+    store.clear();
+    list.forEach(item => store.put(item));
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 function fileToDataUrl(file){
   return new Promise((resolve, reject) => {
@@ -2489,7 +2548,7 @@ async function autoSaveCharacter(){
   const notes = existingCharacterNotes.value.trim();
   try{
     const imageDataUrl = await fileToDataUrl(file);
-    const list = loadCharacterLibrary();
+    const list = await loadCharacterLibrary();
     const existingIndex = activeAutoSavedCharacterId
       ? list.findIndex(c => c.id === activeAutoSavedCharacterId)
       : -1;
@@ -2499,12 +2558,13 @@ async function autoSaveCharacter(){
       activeAutoSavedCharacterId = 'char_' + Date.now();
       list.unshift({ id: activeAutoSavedCharacterId, name, notes, imageDataUrl, fileName, savedAt: Date.now() });
     }
-    saveCharacterLibrary(list);
-    renderCharacterLibrary();
+    await saveCharacterLibrary(list);
+    await renderCharacterLibrary();
     characterSaveStatus.textContent = '✓ 自動で保存しました';
     setTimeout(() => { characterSaveStatus.textContent = ''; }, 1500);
   }catch(e){
     console.warn('キャラクターの自動保存に失敗しました', e);
+    characterSaveStatus.textContent = '⚠ 保存に失敗しました: ' + (e && e.message ? e.message : e);
   }
 }
 
@@ -2531,8 +2591,8 @@ function loadCharacterIntoForm(item){
   activeAutoSavedCharacterId = item.id; // 以後の編集はこのキャラクターを上書きする
 }
 
-function renderCharacterLibrary(){
-  const list = loadCharacterLibrary();
+async function renderCharacterLibrary(){
+  const list = await loadCharacterLibrary();
   const protagonistId = getProtagonistCharacterId();
   characterLibraryList.innerHTML = '';
   characterLibraryEmptyHint.style.display = list.length ? 'none' : 'block';
@@ -2552,7 +2612,7 @@ function renderCharacterLibrary(){
     protagonistCheckbox.type = 'checkbox';
     protagonistCheckbox.checked = isProtagonist;
     protagonistCheckbox.style.cssText = 'width:18px;height:18px;cursor:pointer;';
-    protagonistCheckbox.addEventListener('change', () => {
+    protagonistCheckbox.addEventListener('change', async () => {
       if(protagonistCheckbox.checked){
         setProtagonistCharacterId(item.id);
         loadCharacterIntoForm(item); // 主人公にした時点でそのキャラを呼び出す
@@ -2561,7 +2621,7 @@ function renderCharacterLibrary(){
       } else {
         setProtagonistCharacterId('');
       }
-      renderCharacterLibrary();
+      await renderCharacterLibrary();
     });
     protagonistWrap.appendChild(protagonistCheckbox);
 
@@ -2588,13 +2648,14 @@ function renderCharacterLibrary(){
     deleteBtn.textContent = '×';
     deleteBtn.title = 'このキャラクターを削除';
     deleteBtn.style.cssText = 'padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-weight:bold;';
-    deleteBtn.addEventListener('click', (e) => {
+    deleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if(!confirm(`「${item.name || '無題のキャラクター'}」を削除しますか?`)) return;
-      saveCharacterLibrary(loadCharacterLibrary().filter(c => c.id !== item.id));
+      const list = await loadCharacterLibrary();
+      await saveCharacterLibrary(list.filter(c => c.id !== item.id));
       if(activeAutoSavedCharacterId === item.id) activeAutoSavedCharacterId = null;
       if(getProtagonistCharacterId() === item.id) setProtagonistCharacterId('');
-      renderCharacterLibrary();
+      await renderCharacterLibrary();
     });
 
     row.appendChild(protagonistWrap);
@@ -2604,7 +2665,7 @@ function renderCharacterLibrary(){
     characterLibraryList.appendChild(row);
   });
 }
-renderCharacterLibrary();
+migrateOldCharacterLibraryIfNeeded().then(renderCharacterLibrary);
 
 // 画像を新しく選んだ時点で自動保存(このタイミングで新しいキャラクターとして登録)
 // 複数枚まとめて選んだ場合は、1枚ずつ別々のキャラクターとしてまとめて登録する。
@@ -2626,7 +2687,7 @@ async function batchSaveCharacterFiles(files){
   }
   // 2枚以上まとめて選んだ場合は、名前・補足欄には触れず、ファイル名をそのまま
   // キャラクター名にして一気に登録する。
-  const list = loadCharacterLibrary();
+  const list = await loadCharacterLibrary();
   for(const file of files){
     try{
       const imageDataUrl = await fileToDataUrl(file);
@@ -2636,8 +2697,8 @@ async function batchSaveCharacterFiles(files){
       console.warn('キャラクターの登録に失敗しました', file.name, e);
     }
   }
-  saveCharacterLibrary(list);
-  renderCharacterLibrary();
+  await saveCharacterLibrary(list);
+  await renderCharacterLibrary();
   characterSaveStatus.textContent = `✓ ${files.length}枚のキャラクターを登録しました`;
   setTimeout(() => { characterSaveStatus.textContent = ''; }, 3000);
 }
@@ -2946,7 +3007,9 @@ genVideoPromptBtn.addEventListener('click', () => {
       : '';
     const promptText = `${i+1}. [CRITICAL RULE — MUST FOLLOW]: This video must contain ABSOLUTELY NO text, letters, captions, subtitles, speech bubbles, manga-style sound effect text, or any written characters of any kind, anywhere in the frame, at any point during the clip. This is the single most important rule. Captions will be added separately afterward in a different tool.
 
-Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Reminder: no text, no speech bubbles, no captions, no watermark, no logos — the video must stay completely text-free.`;
+[CRITICAL RULE — MUST FOLLOW]: Do NOT add any other people, background characters, crowds, extras, or passersby that are not already present in the uploaded image. Only the character(s) already shown in the image may appear — no new people should be introduced during the animation.
+
+Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Reminder: no text, no speech bubbles, no captions, no watermark, no logos — the video must stay completely text-free, and no new people should appear beyond what is already in the image.`;
 
     const card = document.createElement('div');
     card.style.cssText = 'background:#0a1220;border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;';
