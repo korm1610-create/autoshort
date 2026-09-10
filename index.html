@@ -323,11 +323,7 @@
     </div>
     <div class="thumbs" id="imagePreview"></div>
     <div class="hint">GPTで作った画像と、Seadance等で作った動画クリップを混ぜてOK。動画の長さに合わせて自動で均等に切り替わります(画像は軽いズーム演出つき、動画はそのまま再生されます)。</div>
-
-    <label class="row" style="gap:8px;margin-top:8px;cursor:pointer;justify-content:flex-start;">
-      <input type="checkbox" id="excludeImagesFromExportCheckbox" checked style="width:16px;height:16px;flex-shrink:0;">
-      <span class="hint" style="margin:0;">アップロードした画像は書き出しに使わない(動画に変換する前の元絵置き場として使う)</span>
-    </label>
+    <div class="hint">※ ここにアップロードした画像は、AI動画への変換用の元絵として使うだけで、書き出しには使われません(実際に使われるのは動画クリップのみです)。</div>
 
     <button type="button" id="genVideoPromptBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid var(--ai);background:transparent;color:#8ba3d1;font-weight:bold;cursor:pointer;">🎬 AI動画用プロンプトを作る</button>
     <div class="hint" style="margin-top:6px;">アップロードした画像を、Canva AIやドロップショットAIなどの画像→動画機能で動かすための指示文(英語)を1枚ずつ作ります。①の台本の流れに合わせて、シーン1は驚き系の掴み、以降はストーリーが伝わるカメラワークになります。</div>
@@ -517,6 +513,7 @@
           <button type="button" id="downloadNarrationBtn" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">⬇ ナレーション+BGM(音声)</button>
           <button type="button" id="downloadSrtBtn" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">⬇ 字幕(SRT)</button>
         </div>
+        <button type="button" id="downloadAssBtn" style="margin-top:6px;width:100%;padding:10px;border-radius:10px;border:1px solid var(--accent2);background:transparent;color:var(--accent2);cursor:pointer;font-size:12.5px;">⬇ 字幕(ASS・フォント/色/縁取り付き・CapCut推奨)</button>
       </div>
     </div>
   </div>
@@ -3996,15 +3993,12 @@ renderBtn.addEventListener('click', async () => {
     alert('③ まず「音声を生成する」ボタンでナレーションを作ってください');
     return;
   }
-  const excludeImages = document.getElementById('excludeImagesFromExportCheckbox').checked;
-  const mediaFromImagesSection = excludeImages
-    ? imageFiles.filter(f => f.type.startsWith('video/'))
-    : imageFiles;
+  // ②にアップロードした画像は、AI動画変換用の元絵置き場として使うだけで、
+  // 常に書き出しからは除外する(動画クリップだけが実際に使われる)。
+  const mediaFromImagesSection = imageFiles.filter(f => f.type.startsWith('video/'));
   allMediaFiles = [...mediaFromImagesSection, ...canvaVideoFiles];
   if(allMediaFiles.length === 0){
-    alert(excludeImages
-      ? '② 動画を1つ以上追加してください(今は「画像は書き出しに使わない」設定になっています)、または④で動画を追加してください'
-      : '② 背景画像・動画、または④で追加した動画を1つ以上追加してください');
+    alert('② または④で、動画クリップを1つ以上追加してください(②の画像は元絵置き場のため書き出しには使われません)');
     return;
   }
 
@@ -4083,6 +4077,47 @@ function buildSrtText(subtitleTimeline){
     return `${i+1}\n${srtTimeFormat(seg.start)} --> ${srtTimeFormat(seg.end)}\n${seg.text}\n`;
   }).join('\n');
 }
+
+// ASS(Advanced SubStation Alpha)形式。SRTと違い、フォント・文字サイズ・色・縁取りなどの
+// デザイン情報も一緒に持てるので、CapCut等に読み込んだ時点でこのアプリと近い見た目になる。
+function assTimeFormat(totalSeconds){
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.floor(totalSeconds % 60);
+  const cs = Math.round((totalSeconds - Math.floor(totalSeconds)) * 100);
+  const pad = (n, len) => String(n).padStart(len, '0');
+  return `${h}:${pad(m,2)}:${pad(s,2)}.${pad(cs,2)}`;
+}
+function buildAssText(subtitleTimeline){
+  const W = canvas.width, H = canvas.height;
+  const centerX = Math.round(W / 2);
+  const centerY = Math.round(H * 0.58); // computeSubtitleLayoutと同じ基準(centerY = H * 0.58)
+
+  const header = `[Script Info]
+Title: edo-shorts-maker subtitles
+ScriptType: v4.00+
+PlayResX: ${W}
+PlayResY: ${H}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Meiryo,${SUBTITLE_FONT_SIZE},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,0,5,20,20,20,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+  const events = subtitleTimeline.map(seg => {
+    // アプリの実際の描画と同じ関数(computeSubtitleLayout)で、行の折り返しまで一致させる。
+    // どのセグメントも中心は必ずcenterYになるので(startYがcenterYを基準に計算される)、
+    // \an5(中央基準)+\posで、プレビューと同じ位置にピッタリ合わせる。
+    const layout = computeSubtitleLayout(seg, W, H, ctx);
+    const text = layout.map(l => l.text).join('\\N');
+    return `Dialogue: 0,${assTimeFormat(seg.start)},${assTimeFormat(seg.end)},Default,,0,0,0,,{\\an5\\pos(${centerX},${centerY})}${text}`;
+  }).join('\n');
+  return header + events + '\n';
+}
+
 function triggerDownload(url, filename){
   const a = document.createElement('a');
   a.href = url;
@@ -4094,6 +4129,7 @@ function triggerDownload(url, filename){
 
 const downloadNarrationBtn = document.getElementById('downloadNarrationBtn');
 const downloadSrtBtn = document.getElementById('downloadSrtBtn');
+const downloadAssBtn = document.getElementById('downloadAssBtn');
 
 downloadNarrationBtn.addEventListener('click', async () => {
   if(!checkNarrationBuffer){
@@ -4144,6 +4180,19 @@ downloadSrtBtn.addEventListener('click', () => {
   const blob = new Blob([srtText], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   triggerDownload(url, 'subtitles.srt');
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+});
+
+downloadAssBtn.addEventListener('click', () => {
+  if(!checkNarrationBuffer || !subtitleRows || subtitleRows.length === 0){
+    alert('字幕がまだ準備できていません');
+    return;
+  }
+  const { subtitleTimeline } = buildFinalTimelines();
+  const assText = buildAssText(subtitleTimeline);
+  const blob = new Blob([assText], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, 'subtitles.ass');
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 });
 
