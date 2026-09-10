@@ -291,6 +291,7 @@
 
     <div id="existingCharPane" style="display:none;">
       <div class="hint" style="margin-top:0;margin-bottom:4px;">保存済みキャラクター(タップで呼び出せます)</div>
+      <div class="hint" id="characterLibraryCount" style="text-align:center;color:var(--accent2);"></div>
       <div id="characterLibraryList" style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;padding-right:4px;"></div>
       <div class="hint" id="characterLibraryEmptyHint" style="text-align:center;">まだ保存済みのキャラクターがありません</div>
 
@@ -2444,6 +2445,7 @@ setupDropZone(charSheetDropZone, existingCharSheet, 'image/', updateCharSheetPre
 const CHARACTER_LIBRARY_KEY = 'edoShortsCharacterLibrary';
 const characterLibraryList = document.getElementById('characterLibraryList');
 const characterLibraryEmptyHint = document.getElementById('characterLibraryEmptyHint');
+const characterLibraryCount = document.getElementById('characterLibraryCount');
 const saveCharacterBtn = document.getElementById('saveCharacterBtn');
 const characterSaveStatus = document.getElementById('characterSaveStatus');
 
@@ -2534,6 +2536,7 @@ function renderCharacterLibrary(){
   const protagonistId = getProtagonistCharacterId();
   characterLibraryList.innerHTML = '';
   characterLibraryEmptyHint.style.display = list.length ? 'none' : 'block';
+  characterLibraryCount.textContent = `保存済みキャラクター: ${list.length}体`;
 
   list.forEach(item => {
     const isProtagonist = item.id === protagonistId;
