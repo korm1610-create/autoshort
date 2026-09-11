@@ -442,6 +442,11 @@
     <div class="hint" style="margin-top:12px;">説明文</div>
     <textarea id="genDescriptionText" style="min-height:100px;" placeholder="生成するとここに説明文(ハッシュタグ付き)が入ります。自由に編集できます。"></textarea>
     <button type="button" id="copyDescriptionBtn" style="margin-top:6px;width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">📋 説明文をコピー</button>
+
+    <div class="hint" style="margin-top:12px;">YouTubeの「タグ」欄用(カンマ区切り・#なし)</div>
+    <textarea id="genYoutubeTagsText" style="min-height:60px;" placeholder="生成するとここにカンマ区切りのタグが入ります。"></textarea>
+    <button type="button" id="copyYoutubeTagsBtn" style="margin-top:6px;width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:12.5px;">📋 タグをコピー</button>
+
     <div class="hint" id="genTitleDescStatus" style="text-align:center;"></div>
   </div>
 
@@ -2034,6 +2039,13 @@ const CATEGORY_HASHTAGS = {
   '美容': ['#江戸時代の美容', '#美容雑学'],
   '食べ物': ['#江戸グルメ', '#食文化']
 };
+const CATEGORY_PLAIN_TAGS = {
+  '暮らし': ['江戸時代の暮らし', '江戸っ子', '暮らしの知恵'],
+  '仕事': ['江戸時代の仕事', '職人', '江戸の職業'],
+  'お金': ['江戸時代のお金', 'お金の話', '江戸経済'],
+  '美容': ['江戸時代の美容', '美容雑学', '江戸美人'],
+  '食べ物': ['江戸グルメ', '食文化', '江戸めし']
+};
 const genTitleDescBtn = document.getElementById('genTitleDescBtn');
 const titleCandidates = document.getElementById('titleCandidates');
 const genDescriptionText = document.getElementById('genDescriptionText');
@@ -2050,10 +2062,30 @@ function buildTitleCandidates(lines, hookLine){
   return [...new Set(candidates)]; // 重複を除く
 }
 
-function buildDescription(lines, category){
-  const body = lines.join('。').replace(/。{2,}/g, '。') + (lines.length ? '。' : '');
+function buildDescription(rawText, category){
+  // 台本は、空行で区切られた「ひとかたまり」の中で複数行に折り返されていることが多い。
+  // そのまとまりの中の行は改行を無視してそのままつなげると自然な1文に戻り、
+  // まとまりとまとまりの間だけ句点で区切ることで、ぶつ切れの説明文を防ぐ。
+  const paragraphs = rawText.split(/\n\s*\n/)
+    .map(p => p.split('\n').map(l => l.trim()).filter(l => l.length > 0).join(''))
+    .filter(p => p.length > 0);
+  const body = paragraphs.join('。').replace(/。{2,}/g, '。').replace(/([!?！？])。/g, '$1') + '。';
   const tags = ['#江戸時代', '#雑学', '#歴史', '#shorts', ...(CATEGORY_HASHTAGS[category] || [])];
-  return `${body}\n\n${tags.join(' ')}`;
+  const outro = '30秒でわかる江戸の雑学\n「へぇ～」と思ったらチャンネル登録よろしくね！';
+  return `${body}\n\n${outro}\n\n${tags.join(' ')}`;
+}
+
+function buildYoutubeTags(category, hookLine){
+  const base = ['江戸時代', '雑学', '歴史', '日本史', 'shorts', 'ショート動画', '豆知識'];
+  const categoryTags = CATEGORY_PLAIN_TAGS[category] || [];
+  // フック文から短いキーワードも1つ拾っておく(先頭の助詞などを軽く除いただけの簡易版)
+  const hookKeyword = hookLine
+    .replace(/[!?！？]+$/g, '')
+    .replace(/(は|って|が|に|の|を|で|と)?(実は|なんと|まさか).*$/,'')
+    .trim();
+  const tags = [...base, ...categoryTags];
+  if(hookKeyword && hookKeyword.length <= 12) tags.push(hookKeyword);
+  return [...new Set(tags)].join(', ');
 }
 
 genTitleDescBtn.addEventListener('click', async () => {
@@ -2108,9 +2140,25 @@ genTitleDescBtn.addEventListener('click', async () => {
     titleCandidates.appendChild(btn);
   });
 
-  genDescriptionText.value = buildDescription(lines, guess.category);
+  genDescriptionText.value = buildDescription(text, guess.category);
+  genYoutubeTagsText.value = buildYoutubeTags(guess.category, hookLine);
   genTitleDescStatus.textContent = '✓ 生成しました。タイトル案をタップするとコピーできます。';
   setTimeout(() => { genTitleDescStatus.textContent = ''; }, 3000);
+});
+
+const genYoutubeTagsText = document.getElementById('genYoutubeTagsText');
+const copyYoutubeTagsBtn = document.getElementById('copyYoutubeTagsBtn');
+copyYoutubeTagsBtn.addEventListener('click', () => {
+  if(!genYoutubeTagsText.value.trim()){
+    alert('先に生成してください');
+    return;
+  }
+  navigator.clipboard.writeText(genYoutubeTagsText.value).then(() => {
+    copyYoutubeTagsBtn.textContent = '✓ コピーしました';
+    setTimeout(() => { copyYoutubeTagsBtn.textContent = '📋 タグをコピー'; }, 1500);
+  }).catch(() => {
+    alert('コピーに失敗しました。手動で選択してコピーしてください。');
+  });
 });
 
 copyDescriptionBtn.addEventListener('click', () => {
@@ -3928,7 +3976,7 @@ function renderImageRows(){
     div.dataset.index = i;
     div.style.cssText = 'display:flex;align-items:center;gap:8px;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:6px;';
     div.innerHTML = `
-      <span style="flex:1;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${start.toFixed(1)}s〜 ${file ? file.name : ('素材'+(i+1))}${isVideo ? ' 🎬 (上のタイムラインで選ぶと切り取り編集できます)' : ''}</span>
+      <span style="flex:1;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${start.toFixed(1)}s〜 素材${i+1}${isVideo ? ' 🎬 (上のタイムラインで選ぶと切り取り編集できます)' : ''}</span>
       <input type="number" class="durInput" min="0.2" step="0.1" value="${row.duration.toFixed(1)}" style="width:60px;background:#150f0a;border:1px solid var(--border);border-radius:6px;color:var(--text);padding:5px;text-align:center;">
     `;
     const durInput = div.querySelector('.durInput');
@@ -3972,7 +4020,7 @@ function renderMediaTimeline(){
     const block = document.createElement('div');
     block.dataset.index = i;
     block.style.cssText = `position:absolute;left:${start*PX_PER_SEC}px;width:${Math.max(row.duration*PX_PER_SEC,20)}px;top:0;height:40px;background:${isVideo ? '#4a9eff' : (i%2===0?'var(--accent2)':'#e0bd5a')};border-radius:5px;overflow:hidden;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,0.3);`;
-    block.innerHTML = `<div style="padding:4px 6px;font-size:11px;color:${isVideo ? '#fff' : '#0d1526'};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;">${isVideo ? '🎬 ' : ''}${file ? file.name : ('素材'+(i+1))}</div>
+    block.innerHTML = `<div style="padding:4px 6px;font-size:11px;color:${isVideo ? '#fff' : '#0d1526'};font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;">${isVideo ? '🎬 ' : ''}素材${i+1}</div>
       <div class="mediaResizeHandle" style="position:absolute;right:0;top:0;width:8px;height:100%;cursor:ew-resize;background:rgba(0,0,0,0.15);"></div>`;
     block.addEventListener('click', (e) => {
       if(e.target.classList.contains('mediaResizeHandle')) return;
