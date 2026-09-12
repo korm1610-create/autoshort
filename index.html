@@ -332,6 +332,9 @@
     <div class="hint">GPTで作った画像と、Seadance等で作った動画クリップを混ぜてOK。動画の長さに合わせて自動で均等に切り替わります(画像は軽いズーム演出つき、動画はそのまま再生されます)。</div>
     <div class="hint">※ ここにアップロードした画像は、AI動画への変換用の元絵として使うだけで、書き出しには使われません(実際に使われるのは動画クリップのみです)。</div>
 
+    <div class="hint" style="margin-top:10px;margin-bottom:4px;">1シーン目(フック)の表情スタイル</div>
+    <div id="hookStyleChoices" class="row" style="gap:6px;flex-wrap:wrap;"></div>
+    <div class="hint" id="hookStyleHint" style="text-align:center;"></div>
     <button type="button" id="genVideoPromptBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid var(--ai);background:transparent;color:#8ba3d1;font-weight:bold;cursor:pointer;">🎬 AI動画用プロンプトを作る</button>
     <div class="hint" style="margin-top:6px;">アップロードした画像を、Canva AIやドロップショットAIなどの画像→動画機能で動かすための指示文(英語)を1枚ずつ作ります。①の台本の流れに合わせて、シーン1は驚き系の掴み、以降はストーリーが伝わるカメラワークになります。</div>
     <div id="videoPromptStatus" class="hint" style="text-align:center;"></div>
@@ -3675,7 +3678,52 @@ const genVideoPromptBtn = document.getElementById('genVideoPromptBtn');
 const videoPromptStatus = document.getElementById('videoPromptStatus');
 const videoPromptList = document.getElementById('videoPromptList');
 
-const VIDEO_MOTION_HOOK = "Quick, punchy zoom-in toward the character's face as their eyes go wide and their mouth opens in shock — sell this as the surprising hook that grabs the viewer's attention in the first second.";
+const VIDEO_MOTION_HOOK_STYLES = {
+  'surprise': {
+    label: 'びっくり顔(定番)',
+    hint: '数字や制度のギャップが強いネタ向け。スクロールを止めさせる力が一番強い',
+    motion: "Quick, punchy zoom-in toward the character's face as their eyes go wide and their mouth opens in shock — sell this as the surprising hook that grabs the viewer's attention in the first second."
+  },
+  'confident': {
+    label: '余裕・キメ顔(粋・かっこよさ系)',
+    hint: '江戸紫、千両役者など「粋」を見せたい回向け',
+    motion: "Quick, stylish zoom-in toward the character's face as they give a confident smirk or a cool, knowing half-smile — sell this as a stylish, self-assured hook that shows off their charisma in the first second."
+  },
+  'calm': {
+    label: '落ち着いた表情(美容・暮らし系)',
+    hint: 'しっとりした美容・暮らし系ネタ向け。ゆっくりカメラで雰囲気重視',
+    motion: "Slow, gentle zoom-in toward the character's calm, composed face with a soft, warm expression — sell this as a relaxed, inviting hook with unhurried camera movement that sets a cozy mood in the first second."
+  },
+  'mysterious': {
+    label: 'ミステリアス(引っ張り系)',
+    hint: '続きが気になる引っ張り系のネタ向け',
+    motion: "Slow, deliberate zoom-in toward the character's face as their eyes narrow slightly with a knowing, mysterious expression — sell this as an intriguing hook that makes the viewer curious what comes next in the first second."
+  }
+};
+let selectedHookStyle = 'surprise';
+
+const hookStyleChoices = document.getElementById('hookStyleChoices');
+const hookStyleHint = document.getElementById('hookStyleHint');
+function renderHookStyleChoices(){
+  hookStyleChoices.innerHTML = '';
+  Object.entries(VIDEO_MOTION_HOOK_STYLES).forEach(([key, style]) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = style.label;
+    const active = key === selectedHookStyle;
+    btn.style.cssText = `padding:6px 10px;border-radius:14px;font-size:12px;cursor:pointer;
+      border:1px solid ${active ? 'var(--ai)' : 'var(--border)'};
+      background:${active ? 'var(--ai)' : 'transparent'};
+      color:${active ? '#0d1526' : 'var(--sub)'};font-weight:${active ? 'bold' : 'normal'};`;
+    btn.addEventListener('click', () => {
+      selectedHookStyle = key;
+      renderHookStyleChoices();
+    });
+    hookStyleChoices.appendChild(btn);
+  });
+  hookStyleHint.textContent = VIDEO_MOTION_HOOK_STYLES[selectedHookStyle].hint;
+}
+renderHookStyleChoices();
 
 const VIDEO_MOTION_WORK = [
   "Slow pan across the scene to reveal the setting, while the character visibly breathes, blinks naturally, and shifts their weight slightly — the character must be clearly alive and moving, not a still photo.",
@@ -3698,17 +3746,19 @@ genVideoPromptBtn.addEventListener('click', () => {
   videoPromptList.innerHTML = '';
   imageFiles.forEach((file, i) => {
     const sceneText = scenes[i] || '';
-    const motion = i === 0 ? VIDEO_MOTION_HOOK : VIDEO_MOTION_WORK[(i - 1) % VIDEO_MOTION_WORK.length];
+    const motion = i === 0 ? VIDEO_MOTION_HOOK_STYLES[selectedHookStyle].motion : VIDEO_MOTION_WORK[(i - 1) % VIDEO_MOTION_WORK.length];
     const sceneNote = sceneText
       ? ` This corresponds to this part of the story (originally in Japanese): "${sceneText}".`
       : '';
-    const promptText = `${i+1}. [TOP PRIORITY RULE — SOLO CHARACTER ONLY]: This clip must contain EXACTLY ONE person, matching the single character already shown in the uploaded image. Zero other people. Not a distant figure, not a blurry passerby, not a silhouette, not a reflection, not a face in a crowd, not anyone glimpsed through a window or doorway. If your instinct is to populate the street/room/background with other people for realism, suppress that instinct — an empty background is correct and required. Treat this as a strict headcount limit: 1 person on screen, always, for the entire clip.
+    const promptText = `Scene ${i+1}: Animate the attached image into a 4-5 second vertical (9:16) video clip for a YouTube Shorts / TikTok series.
 
-[CRITICAL RULE — MUST FOLLOW]: This video must contain ABSOLUTELY NO text, letters, captions, subtitles, speech bubbles, manga-style sound effect text, or any written characters of any kind, anywhere in the frame, at any point during the clip. Captions will be added separately afterward in a different tool.
+Cast: exactly one person on screen — the character already in the attached image. No one else, ever. Not a passerby, not a blurred figure in the background, not a face in a window, not a reflection, not a crowd. If a scene would normally have other people around (a street, a shop, a room), leave it empty of people instead of populating it — an empty background is the correct choice here.
 
-[CRITICAL RULE — MUST FOLLOW]: The character must show clearly visible motion for the entire duration of the clip — blinking, breathing, a small gesture, a head tilt, or similar. Do NOT let the character sit frozen like a still photograph at any point; if the scene is calm, keep the motion small but it must still be continuously visible.
+Motion: ${motion}${sceneNote} The character should never go fully still — keep small continuous motion (blinking, breathing, a subtle gesture) running the entire clip.
 
-Animate this image into a short (4-5 second) vertical 9:16 video clip for YouTube Shorts / TikTok. ${motion}.${sceneNote} Keep the character's face, outfit, colors, and art style exactly as shown in the uploaded image — do not redesign or change their appearance. Final reminder before you generate: exactly one person total (no crowds, no extras, no background people of any kind), no text/captions/watermarks/logos anywhere, and continuous small motion on the character throughout — never a frozen still frame.`;
+Keep the character's face, outfit, colors, and art style identical to the attached image — don't redesign them.
+
+Do not add any text, captions, subtitles, speech bubbles, sound-effect text, watermarks, or logos anywhere in the frame — the clip must stay completely clean, since captions are added separately afterward.`;
 
     const card = document.createElement('div');
     card.style.cssText = 'background:#0a1220;border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;';
