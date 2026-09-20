@@ -138,6 +138,14 @@
     box-shadow:inset 0 0 0 2px var(--bg), 0 4px 16px rgba(0,0,0,0.5);
     background:#000;
   }
+  .checkModalCols{display:flex;flex-direction:column;gap:20px;}
+  .checkModalLeft{flex:none;}
+  .checkModalRight{flex:1;min-width:0;}
+  @media (min-width:900px){
+    .checkModalCols{flex-direction:row;align-items:flex-start;}
+    .checkModalLeft{width:520px;position:sticky;top:0;}
+    canvas{width:clamp(220px, 62vh, 460px);}
+  }
   button#renderBtn{
     width:100%;
     padding:16px;
@@ -235,6 +243,15 @@
     <div id="newCharPane">
       <input type="text" id="characterName" placeholder="キャラクター名 例:カゲマル" style="width:100%;background:#0a1220;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px;font-size:13px;margin-bottom:8px;">
       <textarea id="characterDesc" style="min-height:90px;" placeholder="例:名前:カゲマル/年齢:20歳くらい/身長:170cmくらい/職業:忍者(いたずら専門)/武器:手裏剣・忍刀/性格:生意気・俊敏・いたずら好き/好きなもの:あんだんご/口ぐせ:「捕まえられるもんなら捕まえてみろよ!」&#10;※自由な書き方でOK。書いた項目がそのままシートの設定欄に使われます。"></textarea>
+
+      <div class="row" style="gap:8px;margin-top:8px;">
+        <select id="savedCharsSelect" style="flex:1;">
+          <option value="">— 保存したキャラクターを選ぶ —</option>
+        </select>
+        <button type="button" id="deleteCharBtn" title="選択中のキャラクターを削除" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;">🗑</button>
+      </div>
+      <button type="button" id="saveCharBtn" style="margin-top:8px;width:100%;padding:9px;border-radius:8px;border:1px solid var(--accent2);background:transparent;color:var(--accent2);font-weight:bold;cursor:pointer;">💾 このキャラクターを保存</button>
+      <div class="hint" id="charSaveStatus" style="text-align:center;"></div>
 
       <div class="hint" style="margin-top:10px;margin-bottom:4px;">サイズ比較の相手(任意)</div>
       <input type="text" id="comparisonSubject" placeholder="例:歌舞伎ラッパー、身長185cm" style="width:100%;background:#0a1220;border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px;font-size:13px;">
@@ -378,14 +395,20 @@
   <div id="status"></div>
 
   <div id="checkModalOverlay" style="display:none;position:fixed;inset:0;background:rgba(5,9,18,0.75);z-index:100;align-items:center;justify-content:center;padding:0;">
-    <div style="background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent2);border-radius:0;padding:16px;max-width:680px;width:100%;height:100vh;max-height:100vh;overflow-y:auto;box-sizing:border-box;margin:0 auto;">
+    <div style="background:var(--panel);border:1px solid var(--border);border-top:3px solid var(--accent2);border-radius:0;padding:20px;max-width:1200px;width:100%;height:100vh;max-height:100vh;overflow-y:auto;box-sizing:border-box;margin:0 auto;">
       <div style="font-weight:bold;color:var(--accent2);margin-bottom:8px;">📝 書き出し前の最終チェック</div>
 
+      <div class="checkModalCols">
+      <div class="checkModalLeft">
       <div class="hint" style="margin-top:0;margin-bottom:4px;">▶ プレビュー(実際の映像を見ながら確認できます)</div>
       <div id="checkCanvasWrap" style="position:relative;display:flex;justify-content:center;margin-bottom:10px;">
         <div id="checkCanvasOverlayContainer" style="position:absolute;inset:0;pointer-events:none;"></div>
       </div>
+      <audio id="checkPreviewAudio" controls style="width:100%;margin-top:4px;"></audio>
+      <div id="checkPreviewDisplay" style="margin-top:8px;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:13px;min-height:20px;color:var(--text);">再生すると、今表示されている字幕・画像がここに出ます</div>
+      </div>
 
+      <div class="checkModalRight">
       <div class="hint" style="margin-top:0;margin-bottom:4px;">背景タイムライン(画像/動画) — クリックで選択、動画なら下でどこを切るか調整できます</div>
       <div id="mediaTimelineScroll" style="overflow-x:auto;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:8px 0;position:relative;">
         <div id="mediaTimelineRuler" style="position:relative;height:16px;margin-left:4px;"></div>
@@ -419,9 +442,6 @@
       <button type="button" id="fitOneLineBtn" style="margin-top:10px;width:100%;padding:10px;border-radius:8px;border:none;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#0d1526;font-weight:bold;cursor:pointer;">📏 選択中の字幕を1行に収める</button>
       <div class="hint" id="fitOneLineStatus" style="text-align:center;"></div>
 
-      <audio id="checkPreviewAudio" controls style="width:100%;margin-top:12px;"></audio>
-      <div id="checkPreviewDisplay" style="margin-top:8px;background:#0a1220;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:13px;min-height:20px;color:var(--text);">再生すると、今表示されている字幕・画像がここに出ます</div>
-
       <div class="hint" style="margin-top:16px;margin-bottom:4px;">台本(字幕になります)</div>
       <textarea id="checkScriptText" style="min-height:110px;"></textarea>
       <button type="button" id="rebuildTimelineBtn" style="margin-top:6px;width:100%;padding:8px;border-radius:8px;border:1px solid var(--ai);background:transparent;color:#8ba3d1;cursor:pointer;font-size:12.5px;">🔄 この台本でタイミングを作り直す</button>
@@ -438,6 +458,8 @@
       <div class="row" style="margin-top:4px;">
         <span class="hint" id="imageTotalLabel" style="margin:0;"></span>
         <button type="button" id="normalizeImagesBtn" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--sub);cursor:pointer;font-size:11.5px;">音声の長さに合わせる</button>
+      </div>
+      </div>
       </div>
 
       <div class="row" style="gap:10px;margin-top:16px;">
@@ -543,6 +565,94 @@ deleteScriptBtn.addEventListener('click', () => {
   scriptSaveStatus.textContent = '削除しました';
   setTimeout(() => { scriptSaveStatus.textContent = ''; }, 2000);
 });
+
+// ===== キャラクターライブラリ(localStorageに複数の登場人物を保存して選べるようにする) =====
+const CHAR_LIBRARY_KEY = 'edoShortsCharLibrary';
+const savedCharsSelect = document.getElementById('savedCharsSelect');
+const saveCharBtn = document.getElementById('saveCharBtn');
+const deleteCharBtn = document.getElementById('deleteCharBtn');
+const charSaveStatus = document.getElementById('charSaveStatus');
+
+function loadCharLibrary(){
+  try{
+    return JSON.parse(localStorage.getItem(CHAR_LIBRARY_KEY) || '[]');
+  }catch(e){
+    return [];
+  }
+}
+function saveCharLibrary(list){
+  localStorage.setItem(CHAR_LIBRARY_KEY, JSON.stringify(list));
+}
+function renderSavedCharsSelect(selectId){
+  const list = loadCharLibrary();
+  savedCharsSelect.innerHTML = '<option value="">— 保存したキャラクターを選ぶ —</option>';
+  list.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item.id;
+    opt.textContent = item.name;
+    savedCharsSelect.appendChild(opt);
+  });
+  if(selectId) savedCharsSelect.value = selectId;
+}
+renderSavedCharsSelect();
+
+saveCharBtn.addEventListener('click', () => {
+  const desc = characterDesc.value.trim();
+  const nameField = document.getElementById('characterName').value.trim();
+  if(!desc && !nameField){
+    alert('先にキャラクターの名前か設定を入力してください');
+    return;
+  }
+  const defaultName = nameField || (desc.slice(0, 20) + (desc.length > 20 ? '…' : ''));
+  const name = prompt('このキャラクターの名前を付けてください', defaultName);
+  if(name === null) return; // キャンセル
+
+  const list = loadCharLibrary();
+  const id = 'char_' + Date.now();
+  list.unshift({
+    id,
+    name: name.trim() || defaultName,
+    characterName: nameField,
+    characterDesc: desc,
+    comparisonSubject: document.getElementById('comparisonSubject').value.trim(),
+    locationHints: document.getElementById('locationHints').value.trim(),
+    savedAt: Date.now()
+  });
+  saveCharLibrary(list);
+  renderSavedCharsSelect(id);
+  charSaveStatus.textContent = '✓ 保存しました';
+  setTimeout(() => { charSaveStatus.textContent = ''; }, 2000);
+});
+
+savedCharsSelect.addEventListener('change', () => {
+  const id = savedCharsSelect.value;
+  if(!id) return;
+  const list = loadCharLibrary();
+  const item = list.find(c => c.id === id);
+  if(item){
+    document.getElementById('characterName').value = item.characterName || '';
+    characterDesc.value = item.characterDesc || '';
+    document.getElementById('comparisonSubject').value = item.comparisonSubject || '';
+    document.getElementById('locationHints').value = item.locationHints || '';
+  }
+});
+
+deleteCharBtn.addEventListener('click', () => {
+  const id = savedCharsSelect.value;
+  if(!id){
+    alert('削除したいキャラクターをリストから選んでください');
+    return;
+  }
+  const list = loadCharLibrary();
+  const item = list.find(c => c.id === id);
+  if(!item) return;
+  if(!confirm(`「${item.name}」を削除しますか?`)) return;
+  saveCharLibrary(list.filter(c => c.id !== id));
+  renderSavedCharsSelect();
+  charSaveStatus.textContent = '削除しました';
+  setTimeout(() => { charSaveStatus.textContent = ''; }, 2000);
+});
+
 const imagesInput = document.getElementById('images');
 const imagePreview = document.getElementById('imagePreview');
 const imagesDropZone = document.getElementById('imagesDropZone');
@@ -611,7 +721,7 @@ function getScriptParagraphs(text){
     }
   });
   if(current.length) groups.push(current);
-  return groups.map(g => g.join(' '));
+  return groups.map(g => g.join(''));
 }
 
 function extractKeywords(text){
@@ -1005,9 +1115,9 @@ const CHARACTER_CAMERA_WORK = [
 ];
 
 const OBJECT_CAMERA_WORK = [
-  "Extreme close-up on the object/item from this part of the story, filling the frame, no people visible",
-  "Tight close-up on the key detail of this moment, no character in shot",
-  "Macro-style close-up on the object, character not shown, background softly blurred"
+  "Extreme close-up zoom on the specific physical object, item, or detail explicitly mentioned in this part of the story (identify it from the description below and show THAT exact thing), filling the frame, no people visible",
+  "Tight close-up on that same specific object/detail from this part of the story, no character in shot",
+  "Macro-style close-up on the specific item described in this part of the story, character not shown, background softly blurred"
 ];
 
 // 画像の枚数(sceneCount)に合わせて台本を分割した時、それぞれの区切りが
@@ -1177,7 +1287,7 @@ genPromptBtn.addEventListener('click', async () => {
     const noCharNote = (!includeCharThisScene && useCharacter)
       ? ` No main character/person in this shot — focus on the object/detail.`
       : '';
-    return `${i+1}. 1080x1920px vertical. ${camera}. ${style} Scene ${i+1}/${scenes.length} of a continuous story, depicting (originally Japanese): "${sceneText}".${hookPart}${thisCharPart}${noCharNote} No text, captions, subtitles, speech bubbles, or watermarks anywhere in the image.`;
+    return `${i+1}. 1080x1920px vertical. ${camera}. ${style} Scene ${i+1}/${scenes.length} — this is one shot in a continuous visual story (same world, same time period, consistent lighting/mood as the other scenes), depicting this specific moment (originally Japanese): "${sceneText}".${hookPart}${thisCharPart}${noCharNote} No text, captions, subtitles, speech bubbles, or watermarks anywhere in the image.`;
   });
   const text = promptLines.join('\n\n');
 
@@ -1232,21 +1342,55 @@ bgmVolume.addEventListener('input', () => {
 
 function renderImageFiles(){
   imageFiles = Array.from(imagesInput.files);
+  renderImagePreviewList();
+}
+
+let dragFromIndex = null;
+function renderImagePreviewList(){
   imagePreview.innerHTML = '';
-  imageFiles.forEach(f => {
+  imageFiles.forEach((f, i) => {
     const url = URL.createObjectURL(f);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;display:inline-block;cursor:grab;';
+    wrap.draggable = true;
+    wrap.dataset.index = i;
+
+    const badge = document.createElement('div');
+    badge.textContent = i + 1;
+    badge.style.cssText = 'position:absolute;top:2px;left:2px;background:var(--accent2);color:#0d1526;font-weight:bold;font-size:11px;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;z-index:2;pointer-events:none;';
+    wrap.appendChild(badge);
+
     if(f.type.startsWith('video/')){
       const v = document.createElement('video');
       v.src = url; v.muted = true; v.autoplay = true; v.loop = true; v.playsInline = true;
-      imagePreview.appendChild(v);
+      wrap.appendChild(v);
     } else {
       const img = document.createElement('img');
       img.src = url;
-      imagePreview.appendChild(img);
+      wrap.appendChild(img);
     }
+
+    wrap.addEventListener('dragstart', (e) => {
+      dragFromIndex = i;
+      e.dataTransfer.effectAllowed = 'move';
+      wrap.style.opacity = '0.4';
+    });
+    wrap.addEventListener('dragend', () => { wrap.style.opacity = '1'; });
+    wrap.addEventListener('dragover', (e) => e.preventDefault());
+    wrap.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const toIndex = i;
+      if(dragFromIndex === null || dragFromIndex === toIndex) return;
+      const moved = imageFiles.splice(dragFromIndex, 1)[0];
+      imageFiles.splice(toIndex, 0, moved);
+      dragFromIndex = null;
+      renderImagePreviewList();
+    });
+
+    imagePreview.appendChild(wrap);
   });
   imagesDropText.innerHTML = imageFiles.length
-    ? `✓ ${imageFiles.length}個のファイルを選択中`
+    ? `✓ ${imageFiles.length}個のファイルを選択中(番号の順で並びます。ドラッグで並び替え可)`
     : 'ここに画像・動画をドラッグ&ドロップ<br>またはクリックして選択(複数可)';
 }
 
@@ -1462,13 +1606,13 @@ function drawFrame(currentTime, imageTimeline, subtitleTimeline){
   const idx = imageTimeline.findIndex(s => currentTime >= s.start && currentTime < s.end);
   const seg = idx >= 0 ? imageTimeline[idx] : imageTimeline[imageTimeline.length - 1];
   if(seg){
-    drawMediaSegment(ctx, seg, currentTime, W, H, 1.0);
+    drawMediaSegment(ctx, seg, currentTime, W, H, 1.0, idx);
 
     const nextSeg = idx >= 0 ? imageTimeline[idx + 1] : null;
     const timeToEnd = seg.end - currentTime;
     if(nextSeg && timeToEnd < TRANSITION_DURATION){
       const fadeInAlpha = 1 - (timeToEnd / TRANSITION_DURATION); // 0→1
-      drawMediaSegment(ctx, nextSeg, nextSeg.start, W, H, fadeInAlpha);
+      drawMediaSegment(ctx, nextSeg, nextSeg.start, W, H, fadeInAlpha, idx + 1);
     }
   }
 
@@ -1479,13 +1623,30 @@ function drawFrame(currentTime, imageTimeline, subtitleTimeline){
 }
 
 // 1つの背景セグメント(画像 or 動画)を、指定した不透明度でcanvasに描画する
-function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
+function drawMediaSegment(ctx, seg, currentTime, W, H, alpha, segIndex){
   const media = seg.media;
   const isVideo = media.type === 'video';
   let scale = 1.0;
+  let panX = 0, panY = 0; // -1〜1(overflow分に対する移動割合)
   if(!isVideo){
     const progress = Math.min(Math.max((currentTime - seg.start) / (seg.end - seg.start), 0), 1);
-    scale = 1.0 + 0.08 * progress;
+    // 画像の縦横比を見て、動かせる余地があるかどうかで演出を決める。
+    // 横長な画像(9:16のキャンバスに合わせると左右が大きく余る)はパンで見せ、
+    // 縦長寄りの画像(余地が少ない)はズームだけにする。
+    const imgAspect = media.width / media.height;
+    const canvasAspect = W / H; // 0.5625(9:16)
+    const hasHorizontalRoom = imgAspect > canvasAspect * 1.15;
+    const alt = (segIndex ?? 0) % 2 === 0; // 同じ種類が続いた時の向き違い用
+    const ZOOM_AMOUNT = 0.10;
+
+    if(hasHorizontalRoom){
+      // 横長画像: パンで画面外の部分も見せる
+      scale = 1.0 + ZOOM_AMOUNT * progress;
+      panX = alt ? (-1 + 2 * progress) : (1 - 2 * progress);
+    } else {
+      // 縦長寄り画像: 動かす余地が少ないので、ズームイン/ズームアウトだけにする
+      scale = alt ? (1.0 + ZOOM_AMOUNT * progress) : (1.0 + ZOOM_AMOUNT * (1 - progress));
+    }
   } else {
     // 動画は自前の時間で勝手に再生が進む。毎フレーム細かく補正すると
     // シークが完了する前に次のシークが割り込み、映像が止まって見えてしまうため、
@@ -1531,8 +1692,13 @@ function drawMediaSegment(ctx, seg, currentTime, W, H, alpha){
     drawW = W * scale;
     drawH = drawW / imgRatio;
   }
-  const dx = (W - drawW) / 2;
-  const dy = (H - drawH) / 2;
+  const dxBase = (W - drawW) / 2;
+  const dyBase = (H - drawH) / 2;
+  // パン方向に応じて、はみ出た分の範囲内で位置をずらす(はみ出し量を超えないようclampする)
+  const overflowX = Math.max(0, (drawW - W) / 2);
+  const overflowY = Math.max(0, (drawH - H) / 2);
+  const dx = dxBase + panX * overflowX * 0.6;
+  const dy = dyBase + panY * overflowY * 0.6;
   const prevAlpha = ctx.globalAlpha;
   ctx.globalAlpha = alpha;
   ctx.drawImage(el, dx, dy, drawW, drawH);
